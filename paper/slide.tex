@@ -1,7 +1,8 @@
 \documentclass[10pt,aspectratio=169]{beamer}
 
 \usepackage[T1]{fontenc}
-\usepackage{lmodern}
+% Matches the paper's typography (Times-family text + math).
+\usepackage{newtxtext,newtxmath}
 \usepackage{booktabs}
 \usepackage{tabularx}
 \usepackage{xcolor}
@@ -24,6 +25,13 @@
 \begin{frame}{Governed Shared Memory for Multi-Agent LLM Systems}
 
 \small
+
+{\footnotesize
+Yanki Margalit (Caura.ai) \,$\cdot$\,
+Nurit Cohen-Inger (Ben-Gurion University of the Negev)
+}
+
+\medskip
 
 \begin{columns}[T,onlytextwidth]
 
@@ -51,18 +59,22 @@ correctness, provenance, scoped access.
   \item \textbf{MemClaw} --- managed governed-memory service in production
         at \texttt{memclaw.net}.
   \item \textbf{AgentFleetMem} --- open, async, reproducible evaluation
-        harness. 4 experiments mapped 1:1 to the failure modes. 33 tests.
+        harness. 4 experiments $\to$ 5 metric axes. 33 tests.
 \end{itemize}
 
 \medskip
 
-\textbf{Two architectural findings about production memory infrastructure}
+\textbf{Three architectural findings}
 \begin{enumerate}\setlength\itemsep{0.1em}
+  \item \textcolor{warn}{\textbf{Scope enforcement is bimodal.}}
+        Tenant-level uniformly; sub-tenant only on the search path,
+        not on direct \texttt{GET}-by-id. A function of the
+        authentication model, not a server defect.
   \item \textcolor{warn}{\textbf{Dedup precedes contradiction detection.}}
-        Embedding-similarity 409s block contradictions from ever firing.
-        Pipeline ordering needs to invert when an RDF triple is present.
+        Embedding-similarity \texttt{409}s block contradictions even
+        on a clean tenant where no historical near-duplicates exist.
   \item \textcolor{warn}{\textbf{Cross-agent propagation is privilege-gated.}}
-        \texttt{redistribute} requires \texttt{trust\_level >= 3} ---
+        \texttt{redistribute} requires \texttt{trust\_level $\ge$ 3} ---
         conflates fleet-internal propagation with admin migration.
 \end{enumerate}
 
@@ -71,7 +83,7 @@ correctness, provenance, scoped access.
 % =================== RIGHT COLUMN =====================================
 \begin{column}{0.50\textwidth}
 
-\textbf{Headline empirical results} \hfill {\footnotesize $N=100$, single tenant}
+\textbf{Headline empirical results} \hfill {\footnotesize $N=100$, clean tenant}
 
 \medskip
 
@@ -80,21 +92,22 @@ correctness, provenance, scoped access.
 \toprule
 Primitive & Signal & Result \\
 \midrule
-\textbf{Leakage}       & cross-scope leak rate                 & \textcolor{good}{\textbf{0 / 80}} \\
-                       & \quad 95\% Wilson CI                  & [0.000, 0.045] \\
-                       & search latency p50 / p95              & 562 / 974 ms \\
+\textbf{Leakage}       & access leak rate, GET-by-id           & \textcolor{warn}{\textbf{80 / 80}} \\
+                       & \quad 95\% Wilson CI                  & [0.954, 1.000] \\
+                       & search leak rate                      & 0.45 \\
+                       & access / search p50                   & 296 / 487 ms \\
 \midrule
-\textbf{Provenance}    & chain completeness, depth 4           & 0.64 \\
+\textbf{Provenance}    & chain completeness, depth 4           & 0.56 \\
                        & writer-identity accuracy              & \textcolor{good}{\textbf{1.00}} \\
-                       & per-hop fetch p50 / p95               & \textcolor{good}{\textbf{307 / 341 ms}} \\
+                       & per-hop fetch p50 / p95               & \textcolor{good}{\textbf{290 / 333 ms}} \\
 \midrule
-\textbf{Propagation}   & fleet-sibling visibility              & \textcolor{good}{\textbf{1.00}} \\
-                       & cross-fleet leak rate                 & \textcolor{good}{\textbf{0.00}} \\
-                       & time-to-visibility p50 / p95          & 38 / 49 s \\
+\textbf{Propagation}   & fleet-sibling visibility ($n=60$)     & \textcolor{good}{\textbf{1.00}} \\
+                       & cross-fleet leak rate ($n=40$)        & \textcolor{good}{\textbf{0.00}} \\
+                       & time-to-visibility p50 / p95          & 83 / 130 s \\
 \midrule
 \textbf{Contradiction} & detection rate                        & \textcolor{bad}{\textbf{0 / 100}} \\
-                       & writes succeeded                      & 59 / 200 \\
-                       & write latency p50 / p95               & 2.5 / 6.3 s \\
+                       & writes succeeded                      & 74 / 200 \\
+                       & write latency p50 / p95               & 2.0 / 3.7 s \\
 \bottomrule
 \end{tabularx}
 
@@ -102,13 +115,16 @@ Primitive & Signal & Result \\
 
 \textbf{What the data supports}
 \begin{itemize}\setlength\itemsep{0.1em}
-  \item Scope enforcement \textcolor{good}{holds} under tested boundaries.
+  \item Tenant-level scope \textcolor{good}{enforced uniformly};
+        within-tenant scope is \textcolor{warn}{enforced asymmetrically}
+        across GET and search paths.
   \item Provenance is a \textcolor{good}{viable architectural primitive}
-        at interactive latency.
-  \item Cross-agent propagation has a \textcolor{warn}{measurable
-        $\sim$40 s eventual-consistency window}.
+        at sub-second per-hop latency.
+  \item Cross-agent propagation: \textcolor{good}{zero observed cross-fleet
+        leakage} across 40 probes, with a
+        \textcolor{warn}{$\sim$80 s eventual-consistency window}.
   \item Production memory pipelines need architectural attention to
-        ordering and propagation privilege.
+        ordering, the dedup-vs-contradiction gate, and propagation privilege.
 \end{itemize}
 
 \end{column}
@@ -119,9 +135,10 @@ Primitive & Signal & Result \\
 \hrule height 0.4pt
 \vspace{0.2em}
 {\scriptsize\itshape
-\textbf{Limitations:} single tenant; $N=100$; accumulated server state;
-no baseline comparand. \hfill Paper, harness, and dataset:
-\texttt{memclaw.net} \,/\, \texttt{AgentFleetMem} (anonymized for review).}
+\textbf{Limitations:} single tenant; tenant-scoped API key carries no
+agent identity (sub-tenant GET enforcement structurally untestable);
+$N=100$; no baseline comparand. \hfill
+\texttt{memclaw.net} \,/\, \texttt{github.com/caura-ai/agentfleetmem}}
 
 \end{frame}
 
