@@ -2,6 +2,11 @@
 
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
+% AMS math/theorem packages must load BEFORE newtxmath; newtxmath
+% supplies the symbols ``amssymb`` would otherwise redefine, so
+% ``amssymb`` is intentionally dropped here to avoid the
+% ``\Bbbk already defined`` / ``\openbox already defined`` errors.
+\usepackage{amsmath,amsthm}
 % Times-family text + matching math. Drops the slightly open look of
 % Latin Modern in favour of a denser, more "submitted-paper" feel.
 \usepackage{newtxtext,newtxmath}
@@ -9,7 +14,6 @@
 % layout. Comparable to ACM/USENIX preprint defaults without using
 % their full template machinery.
 \usepackage[margin=0.75in,columnsep=0.28in]{geometry}
-\usepackage{amsmath,amssymb,amsthm}
 \usepackage{booktabs}
 \usepackage{graphicx}
 % Explicit ``figures/`` paths are used on every \includegraphics so the
