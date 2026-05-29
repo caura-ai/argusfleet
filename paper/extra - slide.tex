@@ -50,12 +50,12 @@ Nurit Cohen-Inger (Ben-Gurion University of the Negev)
 distributed-systems problem: governance, synchronization, temporal
 correctness, provenance, scoped access. We propose four architectural
 primitives, instantiate them in \textbf{MemClaw} (production
-\texttt{memclaw.net}), and evaluate via \textbf{ArgusFleet} --- a
-reproducible async harness with 33 tests.
+\texttt{memclaw.net}), and evaluate via \textbf{ArgusFleet} ---
+4 experiments $\to$ 5 metric axes against a live service.
 
 \vspace{0.4em}
 
-\textbf{Failure-mode taxonomy}
+\textbf{Failure-mode taxonomy} (4 modes $\to$ 4 experiments)
 \begin{itemize}\setlength\itemsep{0.05em}\setlength\parskip{0pt}
   \item Unauthorized leakage \quad \textbullet\ Stale propagation
   \item Contradiction persistence \quad \textbullet\ Provenance collapse
@@ -66,12 +66,13 @@ reproducible async harness with 33 tests.
 \textbf{Three architectural findings}
 \begin{enumerate}\setlength\itemsep{0.15em}\setlength\parskip{0pt}
   \item \textcolor{warn}{\textbf{Scope enforcement is bimodal.}}
-        Tenant-level uniformly; sub-tenant only on the search path,
-        not on direct \texttt{GET}-by-id. A function of the
-        authentication model.
+        Tenant uniformly; sub-tenant only on search, not on direct
+        \texttt{GET}-by-id. Caused by tenant-scoped keys carrying no
+        agent identity --- a property of the auth model, not the server.
   \item \textcolor{warn}{\textbf{Dedup precedes contradiction detection.}}
         Embedding-similarity \texttt{409}s block contradictions even on
-        a clean tenant where no historical near-duplicates exist.
+        a clean tenant. Pipeline ordering needs to invert when an RDF
+        triple is present.
   \item \textcolor{warn}{\textbf{Cross-agent propagation is privilege-gated.}}
         \texttt{redistribute} needs \texttt{trust\_level $\ge$ 3} ---
         conflates fleet-internal propagation with admin migration.
@@ -115,12 +116,15 @@ Primitive & Signal & Result \\
 \vspace{0.5em}
 
 \textbf{Take-aways}
-\begin{itemize}\setlength\itemsep{0.1em}\setlength\parskip{0pt}
+\begin{itemize}\setlength\itemsep{0.08em}\setlength\parskip{0pt}
   \item Tenant scope holds; within-tenant scope enforced asymmetrically
         on \textcolor{warn}{GET vs search}.
-  \item Provenance walks at \textcolor{good}{sub-second latency}.
-  \item Propagation: \textcolor{good}{zero cross-fleet leaks at $n=40$},
-        \textcolor{warn}{$\sim$80 s consistency window}.
+  \item Provenance walks at \textcolor{good}{sub-second latency} with
+        \textcolor{good}{1.00 identity accuracy} through round-trips.
+  \item Propagation: \textcolor{good}{zero cross-fleet leaks at $n=40$};
+        \textcolor{warn}{$\sim$80 s eventual-consistency window}.
+  \item Contradiction null is \textcolor{warn}{architectural, not a defect}
+        --- intra-run dedup blocks the detector on a clean tenant.
 \end{itemize}
 
 \end{column}
