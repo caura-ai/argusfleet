@@ -67,49 +67,13 @@ Governed Shared Memory for Multi-Agent LLM Systems
 
 \section{Introduction}
 
-Large-language-model systems are rapidly evolving from isolated assistants into fleets of interacting agents. Enterprise copilots, workflow orchestrators, customer-support systems, research agents, and automation pipelines increasingly rely on persistent memory to coordinate behavior across tasks and time.
+Large-language-model systems are rapidly evolving from isolated assistants into fleets of interacting agents. Enterprise copilots, workflow orchestrators, customer-support systems, research agents, and automation pipelines increasingly rely on persistent memory to coordinate behaviour across tasks and time. Most existing memory systems, however, were designed around a single-agent abstraction --- one user, one conversation, one retrieval stream, one context window --- and this assumption breaks under fleet-scale deployments.
 
-Most existing memory systems were designed around a single-agent abstraction:
-\begin{itemize}
-    \item one user,
-    \item one conversation,
-    \item one retrieval stream,
-    \item one context window.
-\end{itemize}
+When multiple agents interact through shared memory, new correctness and governance requirements emerge that are absent from the single-agent setting. The system must answer who is allowed to retrieve which memory, how conflicting facts are resolved when two agents disagree, how knowledge propagates safely across agent boundaries, whether each retrieved memory can be traced back to its writer, and how stale memories are invalidated when the underlying state changes. These are not retrieval-quality questions. They are distributed-systems and database-consistency questions in retrieval clothing.
 
-This assumption breaks under fleet-scale deployments.
+Current AI memory systems largely optimise for properties inherited from the single-agent world: retrieval relevance, conversational recall, long-context compression, and semantic similarity. Production multi-agent deployments require an additional layer on top: scoped visibility, policy enforcement, temporal correctness, synchronization semantics, and provenance guarantees. We argue that AI memory is therefore evolving from a context-window problem into a governed distributed-memory problem, and that this transition warrants the same systems-level attention historically devoted to databases, event-sourcing, and synchronization infrastructure.
 
-When multiple agents interact through shared memory, new correctness and governance requirements emerge:
-\begin{itemize}
-    \item Which memories are visible to which agents?
-    \item How are conflicting facts resolved?
-    \item How does knowledge propagate between agents?
-    \item Can retrieved memories be traced to their source?
-    \item How are stale memories invalidated?
-\end{itemize}
-
-These problems resemble distributed systems and database consistency problems more than traditional retrieval tasks.
-
-Current memory systems largely optimize for:
-\begin{itemize}
-    \item retrieval relevance,
-    \item conversational recall,
-    \item long-context compression,
-    \item semantic similarity.
-\end{itemize}
-
-However, production multi-agent systems additionally require:
-\begin{itemize}
-    \item scoped visibility,
-    \item policy enforcement,
-    \item temporal correctness,
-    \item synchronization semantics,
-    \item provenance guarantees.
-\end{itemize}
-
-We argue that AI memory is evolving from a context-window problem into a governed distributed-memory problem.
-
-This paper introduces a systems architecture for governed shared memory and presents MemClaw as a reference implementation for fleet-scale AI memory infrastructure.
+This paper introduces a systems architecture for governed shared memory under that framing and presents MemClaw as a reference implementation deployed at fleet scale. We also introduce AgentFleetMem, an evaluation harness that lets the resulting primitives be measured empirically against a live production service.
 
 \subsection{Contributions}
 
@@ -127,146 +91,27 @@ This paper makes six contributions:
 
 \subsection{Long-Context Retrieval}
 
-Recent work has improved retrieval quality through:
-\begin{itemize}
-    \item larger context windows~\citep{longcontext_survey},
-    \item retrieval-augmented generation~\citep{rag2020},
-    \item conversational summarization,
-    \item hierarchical memory systems,
-    \item vector-based semantic retrieval.
-\end{itemize}
-
-These approaches primarily focus on recall accuracy within isolated conversational trajectories.
-
-While increasingly large context windows improve retrieval capacity, they do not inherently provide:
-\begin{itemize}
-    \item governance,
-    \item access control,
-    \item temporal consistency,
-    \item provenance tracking,
-    \item synchronization semantics.
-\end{itemize}
-
-As a result, long-context systems alone are insufficient for multi-agent production deployments.
+Recent work has improved retrieval quality through larger context windows~\citep{longcontext_survey}, retrieval-augmented generation~\citep{rag2020}, conversational summarisation, hierarchical memory systems, and vector-based semantic retrieval. These approaches primarily focus on recall accuracy within an isolated conversational trajectory: how much of the relevant history can the model see, and how reliably can the right span be surfaced when needed. While increasingly large context windows improve retrieval capacity, they do not inherently provide governance, access control, temporal consistency, provenance tracking, or synchronization semantics. As a result, long-context systems alone are insufficient for multi-agent production deployments, where the question shifts from \emph{can the model see this memory} to \emph{should this agent see this memory, and if so, what version of it}.
 
 \subsection{Agent Memory Systems}
 
-Recent agent-memory architectures include:
-\begin{itemize}
-    \item MemGPT / Letta~\citep{memgpt2023},
-    \item Mem0~\citep{mem0},
-    \item Zep~\citep{zep},
-    \item LangMem~\citep{langmem},
-    \item AutoGen memory systems~\citep{autogen}.
-\end{itemize}
-
-Most current systems assume:
-\begin{itemize}
-    \item single-agent retrieval,
-    \item append-only memory,
-    \item unconstrained access,
-    \item weak provenance semantics,
-    \item limited temporal resolution.
-\end{itemize}
-
-These assumptions are often acceptable for chatbot-style interactions but become problematic under multi-agent shared-memory workloads.
+A line of recent agent-memory architectures --- including MemGPT and its successor Letta~\citep{memgpt2023}, Mem0~\citep{mem0}, Zep~\citep{zep}, LangMem~\citep{langmem}, and the memory subsystems of AutoGen~\citep{autogen} --- treats memory as a stand-alone component layered on top of an LLM. Most assume single-agent retrieval against an append-only store with largely unconstrained access, weak provenance semantics, and limited temporal resolution. These assumptions are reasonable for chatbot-style interactions in which one user converses with one assistant; they become problematic under multi-agent shared-memory workloads where different agents have different visibility, different write authority, and different reasoning windows.
 
 \subsection{Distributed Systems and Shared State}
 
-Shared memory across AI agents introduces concerns analogous to traditional distributed systems:
-\begin{itemize}
-    \item synchronization,
-    \item consistency,
-    \item access governance,
-    \item temporal ordering,
-    \item event propagation,
-    \item auditability.
-\end{itemize}
-
-We argue that production AI memory systems increasingly resemble:
-\begin{itemize}
-    \item distributed databases~\citep{dynamo2007, spanner2013},
-    \item event-sourcing and weakly-connected replicated stores~\citep{bayou1995, crdt2011},
-    \item synchronization layers~\citep{lamport1978},
-    \item governance middleware~\citep{rbac1996, nist_attribute_based}.
-\end{itemize}
-
-This suggests that memory infrastructure may become a foundational systems layer for future AI architectures.
+Once memory is genuinely shared across agents, the operational concerns mirror those of traditional distributed systems: synchronisation, consistency, access governance, temporal ordering, event propagation, and auditability. Production AI memory systems therefore increasingly resemble distributed databases~\citep{dynamo2007, spanner2013}, event-sourcing and weakly-connected replicated stores~\citep{bayou1995, crdt2011}, synchronisation layers~\citep{lamport1978}, and governance middleware~\citep{rbac1996, nist_attribute_based} --- not the retrieval indexes from which the agent-memory line of work descended. This suggests that memory infrastructure may become a foundational systems layer for future AI architectures, and that the methods and primitives developed for distributed state are the right vocabulary for reasoning about it.
 
 \section{The Fleet-Memory Problem}
 
-Modern AI systems are increasingly composed not of a single assistant, but of fleets of specialized agents operating over shared persistent state.
+Modern AI deployments are increasingly composed not of a single assistant but of fleets of specialised agents operating over shared persistent state. A customer-support agent may update a user's billing record in a way that subsequently affects a planning agent's schedule, an analytics agent's dashboard, a workflow orchestrator's routing logic, and a downstream compliance system's audit trail. A research agent may surface a finding that synthesis agents, verification agents, reporting systems, and autonomous workflows all need to consume hours or days later. In these environments, memory is no longer ``conversation history''; it is shared operational state, and the correctness story it must support has more in common with shared-storage subsystems than with retrieval indexes.
 
-A customer-support agent may update billing information that later affects:
-\begin{itemize}
-    \item a planning agent,
-    \item an analytics agent,
-    \item a workflow orchestrator,
-    \item and a compliance system.
-\end{itemize}
-
-A research agent may discover information that must later be consumed by:
-\begin{itemize}
-    \item synthesis agents,
-    \item verification agents,
-    \item reporting systems,
-    \item or downstream autonomous workflows.
-\end{itemize}
-
-In these environments, memory is no longer simply ``conversation history.''
-
-It becomes shared operational state.
-
-This shift fundamentally changes the nature of the memory problem.
-
-Traditional LLM memory architectures primarily optimize for:
-\begin{itemize}
-    \item semantic recall,
-    \item conversational continuity,
-    \item long-context retrieval,
-    \item or summarization quality.
-\end{itemize}
-
-These assumptions are sufficient when:
-\begin{itemize}
-    \item one agent interacts with one user,
-    \item over one conversational stream.
-\end{itemize}
-
-They break down when:
-\begin{itemize}
-    \item many agents write to shared memory,
-    \item memory visibility differs across roles,
-    \item facts evolve over time,
-    \item and correctness matters operationally.
-\end{itemize}
-
-Under fleet-scale workloads, memory systems must answer questions that resemble distributed systems problems rather than retrieval problems:
-\begin{itemize}
-    \item Which agents are allowed to retrieve which memories?
-    \item What happens when two agents write contradictory facts?
-    \item How are stale memories superseded?
-    \item Can every retrieved memory be traced to its source?
-    \item How does knowledge propagate safely across agent boundaries?
-\end{itemize}
-
-In other words:
+This shift changes the nature of the problem. Traditional LLM memory architectures optimise for semantic recall, conversational continuity, long-context retrieval, and summarisation quality. These optimisations are sufficient when one agent interacts with one user over one conversational stream. They break down when many agents write to shared memory, when visibility differs across roles, when facts evolve over time, and when correctness matters operationally rather than only narratively. Under fleet-scale workloads, the memory subsystem has to answer which agents are allowed to retrieve which memories, what happens when two agents write contradictory facts, how stale memories are superseded, whether every retrieved memory can be traced to its source, and how knowledge propagates safely across agent boundaries. These are distributed-systems questions, not retrieval questions.
 
 \begin{quote}
-AI memory is evolving from a context-window problem into a distributed systems problem.
+\emph{AI memory is evolving from a context-window problem into a distributed systems problem.}
 \end{quote}
 
-This transition introduces new requirements:
-\begin{itemize}
-    \item governance,
-    \item temporal correctness,
-    \item synchronization,
-    \item provenance,
-    \item scoped visibility,
-    \item policy-aware retrieval.
-\end{itemize}
-
-We refer to this class of systems as \textbf{fleet-memory systems}.
+The transition introduces a new set of requirements --- governance, temporal correctness, synchronisation, provenance, scoped visibility, and policy-aware retrieval --- that the single-agent memory line of work does not address. We refer to systems that meet these requirements as \textbf{fleet-memory systems}.
 
 \subsection{Fleet-Memory Systems}
 
@@ -371,31 +216,17 @@ An agent retrieves memory outside its authorized scope.
 A customer-support agent retrieves billing notes intended only for finance agents.
 
 \paragraph{Implications}
-Unauthorized leakage introduces:
-\begin{itemize}
-    \item privacy risks,
-    \item tenant-isolation failures,
-    \item compliance concerns,
-    \item operational unpredictability.
-\end{itemize}
-
-Naive semantic retrieval architectures are especially vulnerable because retrieval is governed primarily by embedding similarity rather than explicit policy enforcement.
+Unauthorized leakage introduces privacy risk, tenant-isolation failures, compliance exposure, and operational unpredictability. Naive semantic retrieval architectures are especially vulnerable because retrieval eligibility is governed primarily by embedding similarity rather than by explicit policy enforcement.
 
 \subsection{Stale Propagation}
 
-Memory updates fail to synchronize correctly across agents.
+Memory updates fail to synchronise correctly across agents.
 
 \paragraph{Example}
 One agent updates a user's shipping address while another agent continues retrieving outdated state.
 
 \paragraph{Implications}
-Stale propagation can produce:
-\begin{itemize}
-    \item inconsistent workflows,
-    \item contradictory actions,
-    \item degraded user trust,
-    \item operational instability.
-\end{itemize}
+Stale propagation produces inconsistent workflows, contradictory actions, degraded user trust, and operational instability. The eventual-consistency window between write and read becomes part of the system's latency budget, not an implementation detail.
 
 \subsection{Contradiction Persistence}
 
@@ -405,7 +236,7 @@ Conflicting memories coexist without resolution.
 Two mutually incompatible user preferences remain simultaneously retrievable.
 
 \paragraph{Implications}
-Append-only retrieval systems often lack explicit supersession semantics, allowing outdated or contradictory memories to persist indefinitely.
+Append-only retrieval systems often lack explicit supersession semantics, allowing outdated or contradictory memories to persist indefinitely. Downstream agents that read both have no principled way to choose between them.
 
 \subsection{Provenance Collapse}
 
@@ -415,12 +246,7 @@ Retrieved memories cannot be traced to their origin.
 An agent retrieves a fact without attribution to the original writer, source system, or timestamp.
 
 \paragraph{Implications}
-Without provenance:
-\begin{itemize}
-    \item debugging becomes difficult,
-    \item auditability weakens,
-    \item governance guarantees become unverifiable.
-\end{itemize}
+Without provenance, debugging becomes guesswork, auditability weakens, and governance guarantees become unverifiable: the system cannot demonstrate \emph{how} a particular fact entered the store, only that it is present.
 
 \section{Governed Shared Memory Architecture}
 
@@ -454,42 +280,15 @@ Restricted & Explicitly policy-constrained \\
 \end{tabular}
 \end{table}
 
-Semantic similarity alone is insufficient for retrieval eligibility.
-
-All retrieval operations must additionally satisfy governance policies.
+Semantic similarity alone is insufficient for retrieval eligibility; every retrieval operation must additionally satisfy the governance policies attached to the scope of the candidate row.
 
 \subsection{Temporal Resolution}
 
-The architecture treats memory as evolving state rather than immutable append-only retrieval.
-
-Each memory object contains:
-\begin{itemize}
-    \item creation timestamp,
-    \item supersession references,
-    \item contradiction markers,
-    \item provenance metadata,
-    \item confidence state.
-\end{itemize}
-
-Contradictory writes are resolved through temporal ordering and policy-aware resolution rules.
+The architecture treats memory as evolving state rather than immutable append-only retrieval. Each memory object carries a creation timestamp, optional supersession references, contradiction markers, provenance metadata, and a confidence state, and contradictory writes are resolved through temporal ordering and policy-aware resolution rules rather than by silently coexisting in the store.
 
 \subsection{Provenance Graph}
 
-Every memory object stores:
-\begin{itemize}
-    \item writer identity,
-    \item source system,
-    \item derivation history,
-    \item modification lineage.
-\end{itemize}
-
-This enables:
-\begin{itemize}
-    \item auditability,
-    \item debugging,
-    \item traceability,
-    \item compliance verification.
-\end{itemize}
+Every memory object stores its writer identity, source system, derivation history, and modification lineage. This metadata is what enables auditability, debugging, traceability, and compliance verification --- four properties that are increasingly required of memory systems deployed in regulated environments and that distinguish governed memory from retrieval indexes.
 
 \subsection{Policy-Governed Retrieval}
 
