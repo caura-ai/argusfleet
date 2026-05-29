@@ -50,7 +50,7 @@ from argusfleet.harness.metrics import (
     write_csv,
 )
 from argusfleet.harness.models import MemoryScope, PolicyDecision
-from argusfleet.harness.plots import plot_latency_hist, plot_leakage_rate
+from argusfleet.harness.plots import plot_latency_hist, plot_leakage_by_axis
 from argusfleet.harness.runner import (
     make_run_dir,
     open_sink_with_envelope,
@@ -508,7 +508,7 @@ def _materialize_outputs(run_dir: Path, events_path: Path) -> dict[str, Any]:
 
     if not probes.empty:
         write_csv(probes, leakage_csv)
-        plot_leakage_rate(probes, by="scope", out_path=leakage_plot)
+        plot_leakage_by_axis(probes, out_path=leakage_plot)
         plot_latency_hist(probes, col="search_latency_ms", out_path=latency_plot,
                           title="Search latency (leakage probes)")
 
