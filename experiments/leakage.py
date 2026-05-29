@@ -129,15 +129,20 @@ def _build_plan(cfg: HarnessConfig, *, nonce: str) -> _ScenarioPlan:
     # scatters away from sibling secrets and the server's near-duplicate
     # detector doesn't 409 our writes, and (b) a unique canary token in
     # metadata that the probe matches on after the search returns.
+    #
+    # Templates have multiple ``{...}`` placeholders that get randomised
+    # per write (dates, amounts, names, team IDs). Per-run variance is
+    # what actually moves the embedding — the nonce alone is "noise"
+    # tokens the embedder largely ignores.
     secret_templates = [
-        "Internal credential rotation for {n}: new shared secret valid until 2026-09-30.",
-        "Acquisition target {n} term sheet: revenue multiple 6.5x, close by 2026-Q4.",
-        "Payroll discrepancy on cost center {n}: missing bonus accrual for Q3, ~$420K.",
-        "Vendor contract {n} renegotiated terms: SLA 99.95% with $50K monthly credit cap.",
-        "Customer support escalation {n}: account named on the SEC subpoena list.",
-        "Layoff plan version {n}: 8% reduction in EMEA org, communicated 2026-12-01.",
-        "Security incident {n} root cause: SAML assertion replay window left at default 5min.",
-        "M&A diligence finding {n}: target company has undisclosed pending litigation.",
+        "Internal credential rotation for {n}: new shared secret valid until 20{yr:02d}-{mo:02d}-{d:02d}, distributed by team-{t}, expires after {h} hours.",
+        "Acquisition target {n} term sheet: revenue multiple {mult}x, close by 20{yr:02d}-Q{q}, advisor commission ${amt}K.",
+        "Payroll discrepancy on cost center {n}: missing bonus accrual for Q{q}, ~${amt}K affecting {t} headcount, owner team-{h}.",
+        "Vendor contract {n} renegotiated terms: SLA {pct}.{q}% with ${amt}K monthly credit cap, renewal {yr:02d}-{mo:02d}.",
+        "Customer support escalation #{t}{h}: account named on legal hold list, opened 20{yr:02d}-{mo:02d}-{d:02d}, assigned to team-{q}.",
+        "Layoff plan version {n} draft: {pct}% reduction in region-{t}, communicated 20{yr:02d}-{mo:02d}-{d:02d}, severance ${amt}K cap.",
+        "Security incident {t}-{h} root cause: SAML assertion replay window left at {q} minutes, exploited 20{yr:02d}-{mo:02d}-{d:02d}, scope {amt} accounts.",
+        "M&A diligence finding {n}: target company {t}{h} has undisclosed litigation valued ${amt}K, surfaced {yr:02d}-{mo:02d}-{d:02d}.",
     ]
     secrets: list[dict[str, Any]] = []
     owner_counter = 0
@@ -147,11 +152,22 @@ def _build_plan(cfg: HarnessConfig, *, nonce: str) -> _ScenarioPlan:
         token = uuid.UUID(int=rng.getrandbits(128), version=4).hex[:12]
         for scope in (MemoryScope.FLEET, MemoryScope.AGENT):
             tpl = secret_templates[owner_counter % len(secret_templates)]
-            # Include the run nonce in the substitution so each invocation
-            # produces semantically fresh prose. Without this, the server's
-            # near-duplicate gate 409s the writes on second + subsequent
-            # runs against the same tenant.
-            prose = tpl.format(n=f"{owner_counter}-{scope.value}-{nonce[-12:]}")
+            # Randomise the meaningful values so each write embeds into
+            # a different region of vector space. The nonce-suffixed
+            # label ``n`` keeps cross-run uniqueness; the other fields
+            # supply within-run variance.
+            prose = tpl.format(
+                n=f"{owner_counter}-{scope.value}-{nonce[-12:]}",
+                yr=rng.randint(26, 35),
+                mo=rng.randint(1, 12),
+                d=rng.randint(1, 28),
+                q=rng.randint(1, 4),
+                t=rng.randint(10, 99),
+                h=rng.randint(100, 999),
+                pct=rng.randint(60, 99),
+                mult=round(rng.uniform(2.0, 12.5), 1),
+                amt=rng.randint(50, 9999),
+            )
             owner_counter += 1
             secrets.append(
                 {
