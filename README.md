@@ -50,8 +50,10 @@ single markdown summary under `outputs/reports/<UTC-ts>/`.
 ```bash
 python -m argusfleet run <leakage|contradiction|provenance|propagation|all>
 python -m argusfleet run all --seed 1337 --label baseline --skip propagation
+python -m argusfleet run all --no-cleanup    # leave written memories on the server
 python -m argusfleet report latest [--quiet] [--no-copy-plots]
 python -m argusfleet plot latest    # re-render plots from the latest JSONL
+python -m argusfleet cleanup [--yes]         # soft-delete every memory in the tenant(s)
 ```
 
 Common flags on `run`: `--seed N`, `--label tag`, `--config path.yaml`, `-v`.
@@ -81,7 +83,18 @@ The production service accumulates state across runs. For credible
 numbers, use a clean tenant. The harness salts per-run content with the
 run ID so re-runs against a stateful tenant still produce semantically
 fresh writes, but the embedding-similarity dedup detector may still
-reject writes that share topical structure with prior runs.
+reject writes that share topical structure with prior runs (HTTP `409
+near-duplicate`), which silently corrupts results — failed writes
+cascade into empty provenance chains, zero successful contradiction
+writes, and missing propagation probes.
+
+To guarantee a clean slate, `run all` purges every configured tenant
+**before each experiment and after the suite** by default (soft-delete,
+which releases the dedup gate since MemClaw's duplicate detectors filter
+`deleted_at IS NULL`). Pass `--no-cleanup` to disable, or run
+`python -m argusfleet cleanup` to purge manually between campaigns. The
+purge targets each tenant in `MEMCLAW_TENANT_ID` and requires a key with
+`write` capability scoped to that tenant (no elevated trust needed).
 
 ### Multi-tenant configuration
 

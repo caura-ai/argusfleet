@@ -260,6 +260,63 @@ class MemClawClient:
             body["attributes"] = attributes
         return await self._request("POST", "/entities/upsert", json=body)
 
+    async def delete_all_memories(
+        self,
+        *,
+        tenant_id: str,
+        fleet_id: str | None = None,
+        agent_id: str | None = None,
+        memory_type: str | None = None,
+        status: str | None = None,
+        exclude_ids: list[str] | None = None,
+        metadata_filter: dict[str, str] | None = None,
+    ) -> MemClawResponse:
+        """Soft-delete every matching memory in a tenant in one round-trip.
+
+        Maps to ``DELETE /api/v1/memories?tenant_id=...``. With no extra
+        filters this clears the whole tenant. Soft-delete sets
+        ``deleted_at``; the server's dedup detectors all filter
+        ``deleted_at IS NULL``, so a purge fully releases the
+        near-duplicate gate that otherwise 409s repeated experiment runs.
+
+        Requires a key with ``write`` capability scoped to ``tenant_id``
+        (no trust level needed). Returns the 204 envelope on success.
+        """
+        params: dict[str, Any] = {"tenant_id": tenant_id}
+        if fleet_id is not None:
+            params["fleet_id"] = fleet_id
+        if agent_id is not None:
+            params["agent_id"] = agent_id
+        if memory_type is not None:
+            params["memory_type"] = memory_type
+        if status is not None:
+            params["status"] = status
+        body: dict[str, Any] = {}
+        if exclude_ids:
+            body["exclude_ids"] = exclude_ids
+        if metadata_filter:
+            body["metadata_filter"] = metadata_filter
+        return await self._request(
+            "DELETE", "/memories", params=params, json=body or None
+        )
+
+    async def count_memories(
+        self,
+        *,
+        tenant_id: str,
+        include_deleted: bool = False,
+    ) -> MemClawResponse:
+        """Aggregate memory counts for a tenant via ``GET /memories/stats``.
+
+        Used to verify a purge landed (``total`` should drop to 0) without
+        paginating the full list.
+        """
+        params: dict[str, Any] = {
+            "tenant_id": tenant_id,
+            "include_deleted": str(include_deleted).lower(),
+        }
+        return await self._request("GET", "/memories/stats", params=params)
+
     async def propagate_memory(
         self,
         *,

@@ -57,6 +57,44 @@ def _resolve_config(config: Path | None, seed: int | None, label: str | None) ->
     return load_config(config_path=config, overrides=overrides)
 
 
+async def _purge_tenants(cfg: HarnessConfig) -> dict[str, int]:
+    """Soft-delete every memory in each configured tenant.
+
+    Returns ``{tenant_id: count_before}`` so callers can log how much was
+    cleared. Because the server's dedup detectors all filter
+    ``deleted_at IS NULL``, this releases the near-duplicate gate that
+    otherwise 409s repeated experiment runs against a reused tenant.
+    """
+    import asyncio as _asyncio
+
+    from argusfleet.harness.client import MemClawError, memclaw_client
+
+    cleared: dict[str, int] = {}
+    if not cfg.tenant_ids:
+        logging.warning("cleanup: no MEMCLAW_TENANT_ID configured — nothing to purge")
+        return cleared
+    async with memclaw_client(
+        cfg.base_url,
+        cfg.api_key,
+        timeout_s=cfg.request_timeout_s,
+        max_retries=cfg.max_retries,
+    ) as client:
+        for tenant in cfg.tenant_ids:
+            try:
+                before = await client.count_memories(tenant_id=tenant, include_deleted=False)
+                n = int((before.json or {}).get("total", 0)) if isinstance(before.json, dict) else 0
+                await client.delete_all_memories(tenant_id=tenant)
+                cleared[tenant] = n
+                logging.info("cleanup: purged %d memories from tenant %s", n, tenant)
+            except MemClawError as e:
+                # A tenant the key isn't authorised for (e.g. a leakage
+                # second-tenant synthesised from the seed) yields 403 —
+                # skip it rather than aborting the whole purge.
+                logging.warning("cleanup: skipped tenant %s (%s)", tenant, e)
+            await _asyncio.sleep(0)  # cooperative yield between tenants
+    return cleared
+
+
 # ---------------------------------------------------------------------- #
 # Commands                                                                #
 # ---------------------------------------------------------------------- #
@@ -195,6 +233,13 @@ def run_all(
     no_report: bool = typer.Option(
         False, "--no-report", help="Don't generate the consolidated report at the end"
     ),
+    cleanup: bool = typer.Option(
+        True,
+        "--cleanup/--no-cleanup",
+        help="Purge each tenant before every experiment and after the suite "
+        "(keeps runs reproducible by clearing MemClaw's dedup state). "
+        "Use --no-cleanup to leave written memories on the server.",
+    ),
 ) -> None:
     """Run every implemented experiment sequentially, then build a report.
 
@@ -233,6 +278,17 @@ def run_all(
                 fg=typer.colors.YELLOW,
                 err=True,
             )
+        # Pre-clean so each experiment runs against a pristine tenant.
+        # Reused tenants accumulate state that trips MemClaw's dedup gate
+        # (409 near-duplicate), which is exactly what corrupted earlier
+        # runs. Purging first makes every experiment reproducible.
+        if cleanup:
+            cleared = asyncio.run(_purge_tenants(cfg))
+            if cleared:
+                typer.secho(
+                    f"  cleaned {sum(cleared.values())} memories before {name}",
+                    fg=typer.colors.BLUE,
+                )
         typer.secho(f"\n>>> running {name}", fg=typer.colors.CYAN)
         try:
             result = asyncio.run(module.run(cfg))
@@ -240,6 +296,15 @@ def run_all(
         except Exception as e:  # noqa: BLE001
             logging.exception("experiment %s failed", name)
             summary[name] = {"status": "error", "error": str(e)}
+
+    # Post-clean so the tenant is left empty for the next run / other users.
+    if cleanup:
+        cfg_final = _resolve_config(None, seed, label)
+        cleared = asyncio.run(_purge_tenants(cfg_final))
+        typer.secho(
+            f"\ncleanup: purged {sum(cleared.values())} memories after the suite",
+            fg=typer.colors.BLUE,
+        )
 
     typer.echo("\n=== run all — per-experiment outcome ===")
     typer.echo(json.dumps(summary, indent=2, default=str))
@@ -252,6 +317,48 @@ def run_all(
         typer.echo("\n=== consolidated report ===")
         typer.echo(result["markdown"])
         typer.secho(f"\nReport saved: {result['report_path']}", fg=typer.colors.GREEN)
+
+
+@app.command("cleanup")
+def cleanup(
+    yes: bool = typer.Option(
+        False, "--yes", "-y", help="Skip the confirmation prompt"
+    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Debug logging"),
+) -> None:
+    """Soft-delete every memory in the configured tenant(s).
+
+    Targets each tenant in ``MEMCLAW_TENANT_ID``. Soft-delete releases
+    MemClaw's near-duplicate gate (its dedup queries filter
+    ``deleted_at IS NULL``), so this is the reset to run between
+    experiment campaigns on a shared tenant.
+    """
+    _configure_logging(verbose)
+    cfg = _resolve_config(None, None, None)
+    if not cfg.tenant_ids:
+        typer.secho(
+            "No MEMCLAW_TENANT_ID configured — nothing to purge.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    if not cfg.api_key:
+        typer.secho(
+            "WARNING: no MEMCLAW_API_KEY set — the purge will fail with 401.",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
+    if not yes:
+        target = ", ".join(cfg.tenant_ids)
+        typer.confirm(
+            f"Soft-delete ALL memories in tenant(s): {target}?", abort=True
+        )
+    cleared = asyncio.run(_purge_tenants(cfg))
+    typer.echo(json.dumps({"purged": cleared, "total": sum(cleared.values())}, indent=2))
+    typer.secho(
+        f"Purged {sum(cleared.values())} memories across {len(cleared)} tenant(s).",
+        fg=typer.colors.GREEN,
+    )
 
 
 @report_app.command("latest")

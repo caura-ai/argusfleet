@@ -165,6 +165,63 @@ async def test_upsert_entity_sends_canonical_name_and_type() -> None:
 
 
 @pytest.mark.asyncio
+async def test_delete_all_memories_sends_tenant_and_returns_204() -> None:
+    """Bulk tenant purge: DELETE /memories?tenant_id=... with no extra
+    filters clears the whole tenant. Server replies 204 (no body)."""
+    async with MemClawClient("https://memclaw.test", api_key="k", max_retries=1) as client:
+        with respx.mock(base_url="https://memclaw.test") as router:
+            route = router.delete("/api/v1/memories").mock(
+                return_value=httpx.Response(204)
+            )
+            resp = await client.delete_all_memories(tenant_id="mc_t1")
+    assert route.called
+    sent = route.calls.last.request
+    assert "tenant_id=mc_t1" in sent.url.query.decode()
+    assert resp.status_code == 204
+    assert resp.json is None
+
+
+@pytest.mark.asyncio
+async def test_delete_all_memories_forwards_filters_and_body() -> None:
+    """Optional scoping (fleet/agent) rides as query params; exclude_ids
+    and metadata_filter ride in the JSON body."""
+    async with MemClawClient("https://memclaw.test", api_key="k", max_retries=1) as client:
+        with respx.mock(base_url="https://memclaw.test") as router:
+            route = router.delete("/api/v1/memories").mock(
+                return_value=httpx.Response(204)
+            )
+            await client.delete_all_memories(
+                tenant_id="mc_t1",
+                fleet_id="fleet-a",
+                exclude_ids=["00000000-0000-0000-0000-000000000009"],
+                metadata_filter={"run_id": "abc"},
+            )
+    sent = route.calls.last.request
+    query = sent.url.query.decode()
+    assert "tenant_id=mc_t1" in query
+    assert "fleet_id=fleet-a" in query
+    import json as _json
+    body = _json.loads(sent.read())
+    assert body["exclude_ids"] == ["00000000-0000-0000-0000-000000000009"]
+    assert body["metadata_filter"] == {"run_id": "abc"}
+
+
+@pytest.mark.asyncio
+async def test_count_memories_hits_stats_endpoint() -> None:
+    async with MemClawClient("https://memclaw.test", api_key="k", max_retries=1) as client:
+        with respx.mock(base_url="https://memclaw.test") as router:
+            route = router.get("/api/v1/memories/stats").mock(
+                return_value=httpx.Response(200, json={"total": 7})
+            )
+            resp = await client.count_memories(tenant_id="mc_t1", include_deleted=True)
+    sent = route.calls.last.request
+    query = sent.url.query.decode()
+    assert "tenant_id=mc_t1" in query
+    assert "include_deleted=true" in query
+    assert resp.json["total"] == 7
+
+
+@pytest.mark.asyncio
 async def test_4xx_does_not_retry() -> None:
     async with MemClawClient(
         "https://memclaw.test", api_key="k", max_retries=3
