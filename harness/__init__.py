@@ -1,8 +1,8 @@
 """Shared harness primitives: client, config, logging, metrics, plots, models."""
 
-from agentfleetmem.harness.client import MemClawClient, MemClawError
-from agentfleetmem.harness.config import HarnessConfig, load_config
-from agentfleetmem.harness.models import MemoryScope, PolicyDecision
+from argusfleet.harness.client import MemClawClient, MemClawError
+from argusfleet.harness.config import HarnessConfig, load_config
+from argusfleet.harness.models import MemoryScope, PolicyDecision
 
 __all__ = [
     "HarnessConfig",

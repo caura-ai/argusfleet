@@ -24,9 +24,9 @@ import httpx
 import pytest
 import respx
 
-from agentfleetmem.experiments import contradiction
-from agentfleetmem.harness.client import MemClawClient
-from agentfleetmem.harness.config import HarnessConfig
+from argusfleet.experiments import contradiction
+from argusfleet.harness.client import MemClawClient
+from argusfleet.harness.config import HarnessConfig
 
 
 def _fake_server() -> respx.Router:

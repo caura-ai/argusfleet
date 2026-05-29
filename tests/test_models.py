@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from agentfleetmem.harness.models import MemoryScope, PolicyDecision
+from argusfleet.harness.models import MemoryScope, PolicyDecision
 
 
 def test_memory_scope_values() -> None:

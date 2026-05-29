@@ -157,7 +157,7 @@ def render_markdown(latest: dict[str, _RunInfo]) -> str:
     """Render a consolidated markdown report from the latest runs."""
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     lines: list[str] = [
-        "# AgentFleetMem — Latest Results",
+        "# ArgusFleet — Latest Results",
         "",
         f"_Generated {now}_",
         "",
@@ -166,7 +166,7 @@ def render_markdown(latest: dict[str, _RunInfo]) -> str:
         lines.append("No runs found. Execute an experiment first, e.g.")
         lines.append("")
         lines.append("```bash")
-        lines.append("python -m agentfleetmem run leakage")
+        lines.append("python -m argusfleet run leakage")
         lines.append("```")
         return "\n".join(lines)
 

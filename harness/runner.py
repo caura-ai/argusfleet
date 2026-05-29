@@ -20,9 +20,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-from agentfleetmem.harness.client import MemClawClient, memclaw_client
-from agentfleetmem.harness.config import HarnessConfig
-from agentfleetmem.harness.logging import JsonlSink
+from argusfleet.harness.client import MemClawClient, memclaw_client
+from argusfleet.harness.config import HarnessConfig
+from argusfleet.harness.logging import JsonlSink
 
 
 def make_run_id(cfg: HarnessConfig, default_label: str) -> str:

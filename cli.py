@@ -2,10 +2,10 @@
 
 Layout intentionally matches the spec verbatim:
 
-    python -m agentfleetmem run leakage
-    python -m agentfleetmem run contradiction
-    python -m agentfleetmem run scale
-    python -m agentfleetmem plot latest
+    python -m argusfleet run leakage
+    python -m argusfleet run contradiction
+    python -m argusfleet run scale
+    python -m argusfleet plot latest
 
 Non-leakage experiments are stubbed for the first milestone — they return
 a NotImplementedError so a stray invocation can't silently succeed.
@@ -20,7 +20,7 @@ from pathlib import Path
 
 import typer
 
-from agentfleetmem.harness.config import HarnessConfig, load_config
+from argusfleet.harness.config import HarnessConfig, load_config
 
 app = typer.Typer(no_args_is_help=True, help="AgentFleetMem research harness")
 run_app = typer.Typer(no_args_is_help=True, help="Run an experiment")
@@ -73,7 +73,7 @@ def run_leakage(
 ) -> None:
     """Run the cross-scope leakage experiment."""
     _configure_logging(verbose)
-    from agentfleetmem.experiments import leakage
+    from argusfleet.experiments import leakage
 
     if config is None:
         default = Path(__file__).resolve().parent / "configs" / "leakage.yaml"
@@ -100,7 +100,7 @@ def run_contradiction(
 ) -> None:
     """Run the temporal contradiction experiment."""
     _configure_logging(verbose)
-    from agentfleetmem.experiments import contradiction
+    from argusfleet.experiments import contradiction
 
     if config is None:
         default = Path(__file__).resolve().parent / "configs" / "contradiction.yaml"
@@ -127,7 +127,7 @@ def run_provenance(
 ) -> None:
     """Run the provenance reconstruction experiment."""
     _configure_logging(verbose)
-    from agentfleetmem.experiments import provenance
+    from argusfleet.experiments import provenance
 
     if config is None:
         default = Path(__file__).resolve().parent / "configs" / "provenance.yaml"
@@ -154,7 +154,7 @@ def run_propagation(
 ) -> None:
     """Run the cross-agent propagation experiment."""
     _configure_logging(verbose)
-    from agentfleetmem.experiments import propagation
+    from argusfleet.experiments import propagation
 
     if config is None:
         default = Path(__file__).resolve().parent / "configs" / "propagation.yaml"
@@ -203,7 +203,7 @@ def run_all(
     don't abort the rest — the report just shows which one was skipped.
     """
     _configure_logging(verbose)
-    from agentfleetmem.experiments import (
+    from argusfleet.experiments import (
         contradiction as exp_contradiction,
         leakage as exp_leakage,
         propagation as exp_propagation,
@@ -245,7 +245,7 @@ def run_all(
     typer.echo(json.dumps(summary, indent=2, default=str))
 
     if not no_report:
-        from agentfleetmem.harness import report as report_mod
+        from argusfleet.harness import report as report_mod
 
         out = load_config().output_dir
         result = report_mod.write_report(Path(out))
@@ -267,7 +267,7 @@ def report_latest(
     ),
 ) -> None:
     """Generate a consolidated markdown report from the latest run per experiment."""
-    from agentfleetmem.harness import report as report_mod
+    from argusfleet.harness import report as report_mod
 
     cfg = load_config(overrides={"output_dir": output_dir} if output_dir else None)
     result = report_mod.write_report(Path(cfg.output_dir), copy_plots=not no_copy_plots)
@@ -303,13 +303,13 @@ def plot_latest(
     # predate the dispatch table.
     experiment_name = _detect_experiment(events)
     if experiment_name == "contradiction":
-        from agentfleetmem.experiments.contradiction import _materialize_outputs
+        from argusfleet.experiments.contradiction import _materialize_outputs
     elif experiment_name == "provenance":
-        from agentfleetmem.experiments.provenance import _materialize_outputs
+        from argusfleet.experiments.provenance import _materialize_outputs
     elif experiment_name == "propagation":
-        from agentfleetmem.experiments.propagation import _materialize_outputs
+        from argusfleet.experiments.propagation import _materialize_outputs
     else:
-        from agentfleetmem.experiments.leakage import _materialize_outputs
+        from argusfleet.experiments.leakage import _materialize_outputs
 
     result = _materialize_outputs(latest, events)
     typer.echo(json.dumps(result, indent=2, default=str))

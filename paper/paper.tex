@@ -1,4 +1,4 @@
-﻿\documentclass[10pt,twocolumn,letterpaper]{article}
+\documentclass[10pt,twocolumn,letterpaper]{article}
 
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
@@ -338,7 +338,7 @@ The following operations are exercised in this paper:
 
 \subsection{ArgusFleet}
 
-ArgusFleet~\citep{argusfleet} is a Python 3.12 evaluation harness comprising four experiments, an async REST client, a typed domain model, structured event logging, and a reproducible reporting pipeline. It is open-source as the \texttt{agentfleetmem} package at \url{https://github.com/caura-ai/agentfleetmem}; we use the name ArgusFleet for the system throughout this paper. The harness produces JSONL event traces, CSV summaries, and Matplotlib figures from each run, all derived from the same canonical event stream so analysis can be re-executed without re-hitting the server.
+ArgusFleet~\citep{argusfleet} is a Python 3.12 evaluation harness comprising four experiments, an async REST client, a typed domain model, structured event logging, and a reproducible reporting pipeline. It is open-source as the \texttt{argusfleet} package at \url{https://github.com/caura-ai/argusfleet}; we use the name ArgusFleet for the system throughout this paper. The harness produces JSONL event traces, CSV summaries, and Matplotlib figures from each run, all derived from the same canonical event stream so analysis can be re-executed without re-hitting the server.
 
 \paragraph{Determinism.}
 Every workload is seeded. Plan structure (fleets, agents, fact subjects, chain shapes) is reproducible across runs sharing the same seed. Per-run content is salted with a run-unique nonce so that re-running against a stateful production service still produces semantically fresh writes rather than collisions on accumulated state. Each run materialises a uniquely-named output directory of the form \texttt{<UTC-timestamp>-<experiment>-seed<N>/}.

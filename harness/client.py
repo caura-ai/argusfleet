@@ -93,7 +93,7 @@ class MemClawClient:
         self._owns_client = http_client is None
         self._client = http_client or httpx.AsyncClient(
             timeout=httpx.Timeout(timeout_s),
-            headers={"User-Agent": "agentfleetmem/0.1"},
+            headers={"User-Agent": "argusfleet/0.1"},
         )
 
     # ------------------------------------------------------------------ #

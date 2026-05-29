@@ -6,7 +6,7 @@ import httpx
 import pytest
 import respx
 
-from agentfleetmem.harness.client import MemClawClient, MemClawError
+from argusfleet.harness.client import MemClawClient, MemClawError
 
 
 @pytest.mark.asyncio

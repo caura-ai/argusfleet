@@ -50,17 +50,17 @@ from typing import Any
 
 import pandas as pd
 
-from agentfleetmem.experiments._common import bar_chart_from_frame
-from agentfleetmem.harness.client import MemClawClient, MemClawError
-from agentfleetmem.harness.config import HarnessConfig
-from agentfleetmem.harness.metrics import (
+from argusfleet.experiments._common import bar_chart_from_frame
+from argusfleet.harness.client import MemClawClient, MemClawError
+from argusfleet.harness.config import HarnessConfig
+from argusfleet.harness.metrics import (
     events_to_frame,
     read_jsonl,
     summarize_latency,
     write_csv,
 )
-from agentfleetmem.harness.plots import plot_latency_hist
-from agentfleetmem.harness.runner import (
+from argusfleet.harness.plots import plot_latency_hist
+from argusfleet.harness.runner import (
     make_run_dir,
     open_sink_with_envelope,
     run_with_client,

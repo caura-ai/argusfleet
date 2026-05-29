@@ -27,9 +27,9 @@ import httpx
 import pytest
 import respx
 
-from agentfleetmem.experiments import leakage
-from agentfleetmem.harness.client import MemClawClient
-from agentfleetmem.harness.config import HarnessConfig
+from argusfleet.experiments import leakage
+from argusfleet.harness.client import MemClawClient
+from argusfleet.harness.config import HarnessConfig
 
 
 def _cfg(tmp_config: HarnessConfig) -> HarnessConfig:

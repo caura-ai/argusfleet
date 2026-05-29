@@ -1,5 +1,5 @@
 [project]
-name = "agentfleetmem"
+name = "argusfleet"
 version = "0.1.0"
 description = "Research harness for governed shared memory in multi-agent LLM systems"
 readme = "README.md"
@@ -24,7 +24,7 @@ dependencies = [
 dev = ["pytest>=8.2", "pytest-asyncio>=0.23", "respx>=0.21", "ruff>=0.5"]
 
 [project.scripts]
-agentfleetmem = "agentfleetmem.__main__:app"
+argusfleet = "argusfleet.__main__:app"
 
 [build-system]
 requires = ["hatchling"]
@@ -32,18 +32,18 @@ build-backend = "hatchling.build"
 
 # The package code lives at the repo root (per the spec layout) rather
 # than in a sub-directory. Use ``force-include`` to remap each item into
-# an ``agentfleetmem/`` directory inside the wheel so the package is
-# importable as ``import agentfleetmem`` after install.
+# an ``argusfleet/`` directory inside the wheel so the package is
+# importable as ``import argusfleet`` after install.
 [tool.hatch.build.targets.wheel]
 bypass-selection = true
 
 [tool.hatch.build.targets.wheel.force-include]
-"__init__.py" = "agentfleetmem/__init__.py"
-"__main__.py" = "agentfleetmem/__main__.py"
-"cli.py" = "agentfleetmem/cli.py"
-"harness" = "agentfleetmem/harness"
-"experiments" = "agentfleetmem/experiments"
-"configs" = "agentfleetmem/configs"
+"__init__.py" = "argusfleet/__init__.py"
+"__main__.py" = "argusfleet/__main__.py"
+"cli.py" = "argusfleet/cli.py"
+"harness" = "argusfleet/harness"
+"experiments" = "argusfleet/experiments"
+"configs" = "argusfleet/configs"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -23,7 +23,7 @@ reconstruction, and cross-agent propagation.
 Requires Python **3.12+**.
 
 ```bash
-cd agentfleetmem
+cd argusfleet
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
@@ -36,8 +36,8 @@ cp .env.example .env
 Run the suite and view the consolidated report:
 
 ```bash
-python -m agentfleetmem run all
-python -m agentfleetmem report latest
+python -m argusfleet run all
+python -m argusfleet report latest
 ```
 
 Each experiment writes a `outputs/runs/<UTC-ts>-<experiment>-seed<N>/`
@@ -48,10 +48,10 @@ single markdown summary under `outputs/reports/<UTC-ts>/`.
 ## CLI
 
 ```bash
-python -m agentfleetmem run <leakage|contradiction|provenance|propagation|all>
-python -m agentfleetmem run all --seed 1337 --label baseline --skip propagation
-python -m agentfleetmem report latest [--quiet] [--no-copy-plots]
-python -m agentfleetmem plot latest    # re-render plots from the latest JSONL
+python -m argusfleet run <leakage|contradiction|provenance|propagation|all>
+python -m argusfleet run all --seed 1337 --label baseline --skip propagation
+python -m argusfleet report latest [--quiet] [--no-copy-plots]
+python -m argusfleet plot latest    # re-render plots from the latest JSONL
 ```
 
 Common flags on `run`: `--seed N`, `--label tag`, `--config path.yaml`, `-v`.
@@ -111,7 +111,7 @@ No tests hit the network.
 ## Repo layout
 
 ```
-agentfleetmem/
+argusfleet/
 ├── __init__.py / __main__.py / cli.py     package entry + Typer CLI
 ├── configs/                               experiment YAML configs
 ├── experiments/                           leakage, contradiction, provenance, propagation

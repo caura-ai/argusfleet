@@ -5,7 +5,7 @@
 #   .venv\Scripts\activate          # Windows
 #   source .venv/bin/activate       # macOS / Linux
 #   pip install -r requirements.txt
-#   pip install -e .                # install the agentfleetmem package itself
+#   pip install -e .                # install the argusfleet package itself
 #
 # Runtime
 httpx==0.28.1

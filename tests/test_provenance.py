@@ -15,9 +15,9 @@ import httpx
 import pytest
 import respx
 
-from agentfleetmem.experiments import provenance
-from agentfleetmem.harness.client import MemClawClient
-from agentfleetmem.harness.config import HarnessConfig
+from argusfleet.experiments import provenance
+from argusfleet.harness.client import MemClawClient
+from argusfleet.harness.config import HarnessConfig
 
 
 _MEMORY_PATH_RE = re.compile(r"/api/v1/memories/([^/?]+)$")

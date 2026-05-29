@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from agentfleetmem.harness.client import MemClawClient
-from agentfleetmem.harness.config import HarnessConfig
-from agentfleetmem.harness.runner import (
+from argusfleet.harness.client import MemClawClient
+from argusfleet.harness.config import HarnessConfig
+from argusfleet.harness.runner import (
     make_run_dir,
     make_run_id,
     open_sink_with_envelope,

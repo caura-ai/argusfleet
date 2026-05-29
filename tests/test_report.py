@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from agentfleetmem.harness.report import _discover_runs, render_markdown, write_report
+from argusfleet.harness.report import _discover_runs, render_markdown, write_report
 
 
 def _seed_run(
@@ -83,7 +83,7 @@ def test_render_markdown_handles_partial_coverage(tmp_path: Path) -> None:
     )
     latest = _discover_runs(tmp_path)
     md = render_markdown(latest)
-    assert "# AgentFleetMem — Latest Results" in md
+    assert "# ArgusFleet — Latest Results" in md
     assert "## leakage" in md
     assert "leakage_rate" in md
     # Stubbed experiments must show up too, marked as having no run.

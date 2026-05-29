@@ -23,8 +23,8 @@ a distributed-systems problem.*
   with four experiments mapped 1:1 to the failure modes, reporting five
   metric axes (four governance properties + retrieval recall as an
   orthogonal availability control). 33 tests; deterministic, reproducible,
-  salted per-run. Implementation: `agentfleetmem` package at
-  `github.com/caura-ai/agentfleetmem`.
+  salted per-run. Implementation: `argusfleet` package at
+  `github.com/caura-ai/argusfleet`.
 
 ## Headline empirical results (N=100 trials/experiment, clean tenant)
 

@@ -71,9 +71,9 @@ def load_config(
     env_map = {
         "base_url": os.getenv("MEMCLAW_BASE_URL"),
         "api_key": os.getenv("MEMCLAW_API_KEY"),
-        "seed": os.getenv("AGENTFLEETMEM_SEED"),
-        "output_dir": os.getenv("AGENTFLEETMEM_OUTPUT_DIR"),
-        "run_label": os.getenv("AGENTFLEETMEM_RUN_LABEL"),
+        "seed": os.getenv("ARGUSFLEET_SEED"),
+        "output_dir": os.getenv("ARGUSFLEET_OUTPUT_DIR"),
+        "run_label": os.getenv("ARGUSFLEET_RUN_LABEL"),
         "tenant_ids": os.getenv("MEMCLAW_TENANT_ID")
         or os.getenv("MEMCLAW_TENANT_IDS"),
     }

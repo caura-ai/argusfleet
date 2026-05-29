@@ -9,7 +9,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-# Make the repo root importable as ``agentfleetmem`` without an editable
+# Make the repo root importable as ``argusfleet`` without an editable
 # install during quick CI runs. Real users install with ``pip install -e .``.
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT.parent) not in sys.path:
@@ -17,7 +17,7 @@ if str(_REPO_ROOT.parent) not in sys.path:
 
 import pytest
 
-from agentfleetmem.harness.config import HarnessConfig
+from argusfleet.harness.config import HarnessConfig
 
 
 @pytest.fixture

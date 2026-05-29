@@ -1,4 +1,4 @@
-"""Entry point for ``python -m agentfleetmem``."""
+"""Entry point for ``python -m argusfleet``."""
 
 import sys
 
@@ -11,7 +11,7 @@ for _stream in (sys.stdout, sys.stderr):
     if reconfigure is not None:
         reconfigure(encoding="utf-8", errors="replace")
 
-from agentfleetmem.cli import app
+from argusfleet.cli import app
 
 if __name__ == "__main__":
     app()

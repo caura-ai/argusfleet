@@ -79,8 +79,8 @@ regenerate:
 
 ```bash
 cd ..
-python -m agentfleetmem run all
-python -m agentfleetmem report latest
+python -m argusfleet run all
+python -m argusfleet report latest
 ```
 
 The consolidated report at `../outputs/reports/<UTC-timestamp>/report.md`
