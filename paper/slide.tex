@@ -10,11 +10,19 @@
 % Minimal, clean theme — no header/footer chrome, no nav bar.
 \usetheme{default}
 \usecolortheme{seahorse}
+% Tell Beamer to use the fonts we loaded (newtx) rather than fighting
+% them. Without this Beamer falls back to its sans cmss family at small
+% sizes and emits ``Font shape `OT1/cmss/m/n' in size <5.5> not available''
+% warnings whenever a tabular cell or footnote-marker gets shrunk.
+\usefonttheme{professionalfonts}
 \setbeamertemplate{navigation symbols}{}
 \setbeamertemplate{footline}{}
-\setbeamerfont{frametitle}{size=\large,series=\bfseries}
+\setbeamerfont{frametitle}{size=\normalsize,series=\bfseries}
 \setbeamercolor{frametitle}{fg=black}
 \setbeamercolor{block title}{bg=white,fg=structure.fg!80!black}
+% Pull the frametitle closer to the body so the body has more room.
+\setbeamertemplate{frametitle}[default][left]
+\addtobeamertemplate{frametitle}{}{\vspace{-0.6em}}
 
 \definecolor{good}{HTML}{1B7A3E}
 \definecolor{warn}{HTML}{B7791F}
@@ -24,14 +32,14 @@
 
 \begin{frame}{Governed Shared Memory for Multi-Agent LLM Systems}
 
-\small
+\footnotesize
 
-{\footnotesize
+{\scriptsize
 Yanki Margalit (Caura.ai) \,$\cdot$\,
 Nurit Cohen-Inger (Ben-Gurion University of the Negev)
 }
 
-\medskip
+\vspace{0.4em}
 
 \begin{columns}[T,onlytextwidth]
 
@@ -40,41 +48,32 @@ Nurit Cohen-Inger (Ben-Gurion University of the Negev)
 
 \textbf{Thesis.} AI memory is shifting from a context-window problem to a
 distributed-systems problem: governance, synchronization, temporal
-correctness, provenance, scoped access.
+correctness, provenance, scoped access. We propose four architectural
+primitives, instantiate them in \textbf{MemClaw} (production
+\texttt{memclaw.net}), and evaluate via \textbf{AgentFleetMem} --- a
+reproducible async harness with 33 tests.
 
-\medskip
+\vspace{0.4em}
 
-\textbf{Four failure modes we identify and measure}
-\begin{itemize}\setlength\itemsep{0.1em}
-  \item Unauthorized leakage
-  \item Stale propagation
-  \item Contradiction persistence
-  \item Provenance collapse
+\textbf{Failure-mode taxonomy}
+\begin{itemize}\setlength\itemsep{0.05em}\setlength\parskip{0pt}
+  \item Unauthorized leakage \quad \textbullet\ Stale propagation
+  \item Contradiction persistence \quad \textbullet\ Provenance collapse
 \end{itemize}
 
-\medskip
-
-\textbf{What we built}
-\begin{itemize}\setlength\itemsep{0.1em}
-  \item \textbf{MemClaw} --- managed governed-memory service in production
-        at \texttt{memclaw.net}.
-  \item \textbf{AgentFleetMem} --- open, async, reproducible evaluation
-        harness. 4 experiments $\to$ 5 metric axes. 33 tests.
-\end{itemize}
-
-\medskip
+\vspace{0.3em}
 
 \textbf{Three architectural findings}
-\begin{enumerate}\setlength\itemsep{0.1em}
+\begin{enumerate}\setlength\itemsep{0.15em}\setlength\parskip{0pt}
   \item \textcolor{warn}{\textbf{Scope enforcement is bimodal.}}
         Tenant-level uniformly; sub-tenant only on the search path,
         not on direct \texttt{GET}-by-id. A function of the
-        authentication model, not a server defect.
+        authentication model.
   \item \textcolor{warn}{\textbf{Dedup precedes contradiction detection.}}
-        Embedding-similarity \texttt{409}s block contradictions even
-        on a clean tenant where no historical near-duplicates exist.
+        Embedding-similarity \texttt{409}s block contradictions even on
+        a clean tenant where no historical near-duplicates exist.
   \item \textcolor{warn}{\textbf{Cross-agent propagation is privilege-gated.}}
-        \texttt{redistribute} requires \texttt{trust\_level $\ge$ 3} ---
+        \texttt{redistribute} needs \texttt{trust\_level $\ge$ 3} ---
         conflates fleet-internal propagation with admin migration.
 \end{enumerate}
 
@@ -83,11 +82,12 @@ correctness, provenance, scoped access.
 % =================== RIGHT COLUMN =====================================
 \begin{column}{0.50\textwidth}
 
-\textbf{Headline empirical results} \hfill {\footnotesize $N=100$, clean tenant}
+\textbf{Headline results} \hfill {\scriptsize $N=100$, clean tenant}
 
-\medskip
+\vspace{0.3em}
 
-\renewcommand{\arraystretch}{1.15}
+{\scriptsize
+\renewcommand{\arraystretch}{1.05}
 \begin{tabularx}{\linewidth}{lXr}
 \toprule
 Primitive & Signal & Result \\
@@ -95,14 +95,14 @@ Primitive & Signal & Result \\
 \textbf{Leakage}       & access leak rate, GET-by-id           & \textcolor{warn}{\textbf{80 / 80}} \\
                        & \quad 95\% Wilson CI                  & [0.954, 1.000] \\
                        & search leak rate                      & 0.45 \\
-                       & access / search p50                   & 296 / 487 ms \\
+                       & access / search latency p50           & 296 / 487 ms \\
 \midrule
 \textbf{Provenance}    & chain completeness, depth 4           & 0.56 \\
                        & writer-identity accuracy              & \textcolor{good}{\textbf{1.00}} \\
                        & per-hop fetch p50 / p95               & \textcolor{good}{\textbf{290 / 333 ms}} \\
 \midrule
-\textbf{Propagation}   & fleet-sibling visibility ($n=60$)     & \textcolor{good}{\textbf{1.00}} \\
-                       & cross-fleet leak rate ($n=40$)        & \textcolor{good}{\textbf{0.00}} \\
+\textbf{Propagation}   & fleet visibility ($n=60$)             & \textcolor{good}{\textbf{1.00}} \\
+                       & cross-fleet leak ($n=40$)             & \textcolor{good}{\textbf{0.00}} \\
                        & time-to-visibility p50 / p95          & 83 / 130 s \\
 \midrule
 \textbf{Contradiction} & detection rate                        & \textcolor{bad}{\textbf{0 / 100}} \\
@@ -110,21 +110,17 @@ Primitive & Signal & Result \\
                        & write latency p50 / p95               & 2.0 / 3.7 s \\
 \bottomrule
 \end{tabularx}
+}
 
-\medskip
+\vspace{0.5em}
 
-\textbf{What the data supports}
-\begin{itemize}\setlength\itemsep{0.1em}
-  \item Tenant-level scope \textcolor{good}{enforced uniformly};
-        within-tenant scope is \textcolor{warn}{enforced asymmetrically}
-        across GET and search paths.
-  \item Provenance is a \textcolor{good}{viable architectural primitive}
-        at sub-second per-hop latency.
-  \item Cross-agent propagation: \textcolor{good}{zero observed cross-fleet
-        leakage} across 40 probes, with a
-        \textcolor{warn}{$\sim$80 s eventual-consistency window}.
-  \item Production memory pipelines need architectural attention to
-        ordering, the dedup-vs-contradiction gate, and propagation privilege.
+\textbf{Take-aways}
+\begin{itemize}\setlength\itemsep{0.1em}\setlength\parskip{0pt}
+  \item Tenant scope holds; within-tenant scope enforced asymmetrically
+        on \textcolor{warn}{GET vs search}.
+  \item Provenance walks at \textcolor{good}{sub-second latency}.
+  \item Propagation: \textcolor{good}{zero cross-fleet leaks at $n=40$},
+        \textcolor{warn}{$\sim$80 s consistency window}.
 \end{itemize}
 
 \end{column}
@@ -135,9 +131,9 @@ Primitive & Signal & Result \\
 \hrule height 0.4pt
 \vspace{0.2em}
 {\scriptsize\itshape
-\textbf{Limitations:} single tenant; tenant-scoped API key carries no
-agent identity (sub-tenant GET enforcement structurally untestable);
-$N=100$; no baseline comparand. \hfill
+\textbf{Limitations:} single tenant; tenant-scoped key (no agent
+identity, so sub-tenant GET enforcement is structurally untestable);
+$N=100$; no baseline. \hfill
 \texttt{memclaw.net} \,/\, \texttt{github.com/caura-ai/agentfleetmem}}
 
 \end{frame}
