@@ -1,0 +1,141 @@
+% Starter bibliography for "Governed Shared Memory for Multi-Agent LLM Systems".
+% Entries are placeholders — verify titles, venues, years, and pages before
+% submission. URLs should be replaced with persistent DOIs where available.
+
+% ---------- Agent memory systems (single-agent, conversational) ----------
+
+@inproceedings{memgpt2023,
+  author    = {Charles Packer and Sarah Wooders and Kevin Lin and Vivian Fang and Shishir G. Patil and Ion Stoica and Joseph E. Gonzalez},
+  title     = {{MemGPT}: Towards {LLMs} as Operating Systems},
+  booktitle = {arXiv preprint},
+  year      = {2023},
+  eprint    = {2310.08560},
+  archivePrefix = {arXiv}
+}
+
+@misc{mem0,
+  author = {{Mem0 contributors}},
+  title  = {{Mem0}: The Memory Layer for Personalized {AI}},
+  year   = {2024},
+  howpublished = {\url{https://github.com/mem0ai/mem0}}
+}
+
+@misc{zep,
+  author = {{Getzep}},
+  title  = {{Zep}: Long-Term Memory for {AI} Assistants},
+  year   = {2024},
+  howpublished = {\url{https://github.com/getzep/zep}}
+}
+
+@misc{langmem,
+  author = {{LangChain}},
+  title  = {{LangMem}: Long-term Memory for {LLM} Agents},
+  year   = {2024},
+  howpublished = {\url{https://langchain-ai.github.io/langmem/}}
+}
+
+@misc{autogen,
+  author = {Qingyun Wu and Gagan Bansal and Jieyu Zhang and Yiran Wu and Beibin Li and Erkang Zhu and Li Jiang and Xiaoyun Zhang and Shaokun Zhang and Jiale Liu and Ahmed Awadallah and Ryen W. White and Doug Burger and Chi Wang},
+  title  = {{AutoGen}: Enabling Next-Gen {LLM} Applications via Multi-Agent Conversation Framework},
+  year   = {2023},
+  eprint = {2308.08155},
+  archivePrefix = {arXiv}
+}
+
+% ---------- Retrieval-augmented generation and long context ----------
+
+@inproceedings{rag2020,
+  author    = {Patrick Lewis and Ethan Perez and Aleksandra Piktus and Fabio Petroni and Vladimir Karpukhin and Naman Goyal and Heinrich K{\"u}ttler and Mike Lewis and Wen-tau Yih and Tim Rockt{\"a}schel and Sebastian Riedel and Douwe Kiela},
+  title     = {Retrieval-Augmented Generation for Knowledge-Intensive {NLP} Tasks},
+  booktitle = {Advances in Neural Information Processing Systems ({NeurIPS})},
+  year      = {2020}
+}
+
+@misc{longcontext_survey,
+  author = {{Survey authors (placeholder)}},
+  title  = {A Survey on Long-Context Methods for Large Language Models},
+  year   = {2024},
+  note   = {Replace with a current long-context survey before submission.}
+}
+
+% ---------- Distributed systems and shared state (background) ----------
+
+@article{lamport1978,
+  author  = {Leslie Lamport},
+  title   = {Time, Clocks, and the Ordering of Events in a Distributed System},
+  journal = {Communications of the {ACM}},
+  volume  = {21},
+  number  = {7},
+  pages   = {558--565},
+  year    = {1978}
+}
+
+@inproceedings{bayou1995,
+  author    = {Douglas B. Terry and Marvin M. Theimer and Karin Petersen and Alan J. Demers and Mike J. Spreitzer and Carl H. Hauser},
+  title     = {Managing Update Conflicts in {Bayou}, a Weakly Connected Replicated Storage System},
+  booktitle = {{ACM} Symposium on Operating Systems Principles ({SOSP})},
+  year      = {1995},
+  pages     = {172--182}
+}
+
+@inproceedings{crdt2011,
+  author    = {Marc Shapiro and Nuno Pregui{\c{c}}a and Carlos Baquero and Marek Zawirski},
+  title     = {Conflict-Free Replicated Data Types},
+  booktitle = {Symposium on Self-Stabilizing Systems ({SSS})},
+  year      = {2011}
+}
+
+@article{dynamo2007,
+  author  = {Giuseppe DeCandia and Deniz Hastorun and Madan Jampani and Gunavardhan Kakulapati and Avinash Lakshman and Alex Pilchin and Swaminathan Sivasubramanian and Peter Vosshall and Werner Vogels},
+  title   = {{Dynamo}: Amazon's Highly Available Key-Value Store},
+  journal = {{ACM} {SIGOPS} Operating Systems Review},
+  volume  = {41},
+  number  = {6},
+  pages   = {205--220},
+  year    = {2007}
+}
+
+@article{spanner2013,
+  author  = {James C. Corbett and Jeffrey Dean and Michael Epstein and Andrew Fikes and Christopher Frost and J. J. Furman and Sanjay Ghemawat and Andrey Gubarev and Christopher Heiser and Peter Hochschild and Wilson Hsieh and Sebastian Kanthak and Eugene Kogan and Hongyi Li and Alexander Lloyd and Sergey Melnik and David Mwaura and David Nagle and Sean Quinlan and Rajesh Rao and Lindsay Rolig and Yasushi Saito and Michal Szymaniak and Christopher Taylor and Ruth Wang and Dale Woodford},
+  title   = {{Spanner}: Google's Globally Distributed Database},
+  journal = {{ACM} Transactions on Computer Systems},
+  volume  = {31},
+  number  = {3},
+  pages   = {8:1--8:22},
+  year    = {2013}
+}
+
+% ---------- Governance / policy / access control ----------
+
+@article{rbac1996,
+  author  = {Ravi S. Sandhu and Edward J. Coyne and Hal L. Feinstein and Charles E. Youman},
+  title   = {Role-Based Access Control Models},
+  journal = {{IEEE} Computer},
+  volume  = {29},
+  number  = {2},
+  pages   = {38--47},
+  year    = {1996}
+}
+
+@misc{nist_attribute_based,
+  author = {Vincent C. Hu and others},
+  title  = {Guide to Attribute Based Access Control ({ABAC}) Definition and Considerations},
+  year   = {2014},
+  note   = {{NIST} Special Publication 800-162}
+}
+
+% ---------- Reference implementation and harness ----------
+
+@misc{memclaw,
+  author = {Anonymous},
+  title  = {{MemClaw}: A Managed Memory Service for Multi-Agent {LLM} Systems},
+  year   = {2026},
+  howpublished = {\url{https://memclaw.net}}
+}
+
+@misc{agentfleetmem,
+  author = {Anonymous},
+  title  = {{AgentFleetMem}: A Reproducible Evaluation Harness for Governed Shared Memory},
+  year   = {2026},
+  howpublished = {Open-source release; redacted for double-blind review.}
+}

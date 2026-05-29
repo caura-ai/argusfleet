@@ -1,0 +1,36 @@
+# Python build / cache
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+dist/
+build/
+
+# Secrets
+.env
+
+# Experiment outputs
+outputs/runs/
+outputs/reports/
+outputs/*.png
+outputs/*.csv
+outputs/*.jsonl
+!outputs/.gitkeep
+
+# Paper transient artifacts
+paper/_overleaf_flat/
+paper/*.aux
+paper/*.log
+paper/*.out
+paper/*.bbl
+paper/*.blg
+paper/*.fls
+paper/*.fdb_latexmk
+paper/*.synctex.gz
+paper/*.toc
+# Keep the zip bundles checked in for reviewers; uncomment to ignore them.
+# paper/*.zip

@@ -1,0 +1,128 @@
+\documentclass[10pt,aspectratio=169]{beamer}
+
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{xcolor}
+
+% Minimal, clean theme — no header/footer chrome, no nav bar.
+\usetheme{default}
+\usecolortheme{seahorse}
+\setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{footline}{}
+\setbeamerfont{frametitle}{size=\large,series=\bfseries}
+\setbeamercolor{frametitle}{fg=black}
+\setbeamercolor{block title}{bg=white,fg=structure.fg!80!black}
+
+\definecolor{good}{HTML}{1B7A3E}
+\definecolor{warn}{HTML}{B7791F}
+\definecolor{bad}{HTML}{B91C1C}
+
+\begin{document}
+
+\begin{frame}{Governed Shared Memory for Multi-Agent LLM Systems}
+
+\small
+
+\begin{columns}[T,onlytextwidth]
+
+% =================== LEFT COLUMN ======================================
+\begin{column}{0.48\textwidth}
+
+\textbf{Thesis.} AI memory is shifting from a context-window problem to a
+distributed-systems problem: governance, synchronization, temporal
+correctness, provenance, scoped access.
+
+\medskip
+
+\textbf{Four failure modes we identify and measure}
+\begin{itemize}\setlength\itemsep{0.1em}
+  \item Unauthorized leakage
+  \item Stale propagation
+  \item Contradiction persistence
+  \item Provenance collapse
+\end{itemize}
+
+\medskip
+
+\textbf{What we built}
+\begin{itemize}\setlength\itemsep{0.1em}
+  \item \textbf{MemClaw} --- managed governed-memory service in production
+        at \texttt{memclaw.net}.
+  \item \textbf{AgentFleetMem} --- open, async, reproducible evaluation
+        harness. 4 experiments mapped 1:1 to the failure modes. 33 tests.
+\end{itemize}
+
+\medskip
+
+\textbf{Two architectural findings about production memory infrastructure}
+\begin{enumerate}\setlength\itemsep{0.1em}
+  \item \textcolor{warn}{\textbf{Dedup precedes contradiction detection.}}
+        Embedding-similarity 409s block contradictions from ever firing.
+        Pipeline ordering needs to invert when an RDF triple is present.
+  \item \textcolor{warn}{\textbf{Cross-agent propagation is privilege-gated.}}
+        \texttt{redistribute} requires \texttt{trust\_level >= 3} ---
+        conflates fleet-internal propagation with admin migration.
+\end{enumerate}
+
+\end{column}
+
+% =================== RIGHT COLUMN =====================================
+\begin{column}{0.50\textwidth}
+
+\textbf{Headline empirical results} \hfill {\footnotesize $N=100$, single tenant}
+
+\medskip
+
+\renewcommand{\arraystretch}{1.15}
+\begin{tabularx}{\linewidth}{lXr}
+\toprule
+Primitive & Signal & Result \\
+\midrule
+\textbf{Leakage}       & cross-scope leak rate                 & \textcolor{good}{\textbf{0 / 80}} \\
+                       & \quad 95\% Wilson CI                  & [0.000, 0.045] \\
+                       & search latency p50 / p95              & 562 / 974 ms \\
+\midrule
+\textbf{Provenance}    & chain completeness, depth 4           & 0.64 \\
+                       & writer-identity accuracy              & \textcolor{good}{\textbf{1.00}} \\
+                       & per-hop fetch p50 / p95               & \textcolor{good}{\textbf{307 / 341 ms}} \\
+\midrule
+\textbf{Propagation}   & fleet-sibling visibility              & \textcolor{good}{\textbf{1.00}} \\
+                       & cross-fleet leak rate                 & \textcolor{good}{\textbf{0.00}} \\
+                       & time-to-visibility p50 / p95          & 38 / 49 s \\
+\midrule
+\textbf{Contradiction} & detection rate                        & \textcolor{bad}{\textbf{0 / 100}} \\
+                       & writes succeeded                      & 59 / 200 \\
+                       & write latency p50 / p95               & 2.5 / 6.3 s \\
+\bottomrule
+\end{tabularx}
+
+\medskip
+
+\textbf{What the data supports}
+\begin{itemize}\setlength\itemsep{0.1em}
+  \item Scope enforcement \textcolor{good}{holds} under tested boundaries.
+  \item Provenance is a \textcolor{good}{viable architectural primitive}
+        at interactive latency.
+  \item Cross-agent propagation has a \textcolor{warn}{measurable
+        $\sim$40 s eventual-consistency window}.
+  \item Production memory pipelines need architectural attention to
+        ordering and propagation privilege.
+\end{itemize}
+
+\end{column}
+
+\end{columns}
+
+\vspace{0.3em}
+\hrule height 0.4pt
+\vspace{0.2em}
+{\scriptsize\itshape
+\textbf{Limitations:} single tenant; $N=100$; accumulated server state;
+no baseline comparand. \hfill Paper, harness, and dataset:
+\texttt{memclaw.net} \,/\, \texttt{AgentFleetMem} (anonymized for review).}
+
+\end{frame}
+
+\end{document}

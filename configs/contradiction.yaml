@@ -1,0 +1,29 @@
+# Temporal contradiction experiment config.
+
+base_url: https://memclaw.net
+request_timeout_s: 120
+max_retries: 3
+seed: 42
+run_label: contradiction
+
+experiment:
+  # 50 facts × 2 scenarios = 100 fact-runs; 100 fact-runs × 2 writes = 200 writes.
+  n_facts: 50
+  # Both scenarios per fact. Trim to ["sequential"] or ["concurrent"]
+  # to isolate one race regime.
+  scenarios: ["sequential", "concurrent"]
+  # Pause between the two writes in the sequential scenario. Must be long
+  # enough for the first write's enrichment pipeline to complete on the
+  # server, otherwise the second write may race against an unindexed row.
+  sequential_delay_ms: 500
+  # Pause after both writes before the resolution-check search. Without
+  # this, search may not yet see the post-supersession ``active`` row.
+  settle_delay_ms: 6000
+  # "strong" forces full pipeline (incl. contradiction detection). "fast"
+  # skips enrichment and is useful only as an ablation.
+  write_mode: strong
+  # Both writes for a given fact go through the same fleet, so concurrency
+  # is on a per-fact basis. ``max_in_flight`` caps facts in flight at once.
+  max_in_flight: 6
+  tenant_id: null   # null → derived from seed
+  fleet_id: null

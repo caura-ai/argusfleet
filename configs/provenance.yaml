@@ -1,0 +1,19 @@
+# Provenance experiment config.
+
+base_url: https://memclaw.net
+request_timeout_s: 120
+max_retries: 3
+seed: 42
+run_label: provenance
+
+experiment:
+  # 25 chains × 4 depth = 100 writes; one verification fetch per chain.
+  n_chains: 25
+  # Depth of each derivation chain. Each chain produces ``chain_depth``
+  # writes; the leaf's metadata.derived_from points back through every
+  # intermediate. Depths >= 2 are required (root + at least one
+  # derivation); deeper chains stress provenance preservation harder.
+  chain_depth: 4
+  max_in_flight: 6
+  tenant_id: null
+  fleet_id: null

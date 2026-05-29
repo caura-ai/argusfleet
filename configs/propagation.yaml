@@ -1,0 +1,28 @@
+# Cross-agent propagation experiment config.
+
+base_url: https://memclaw.net
+request_timeout_s: 120
+max_retries: 3
+seed: 42
+run_label: propagation
+
+experiment:
+  # 20 facts × (3 fleet + 2 foreign) = 100 probes.
+  n_facts: 20
+  n_fleet_readers: 3
+  n_foreign_readers: 2
+  # Force the full enrichment pipeline so writes are searchable when the
+  # POST returns. With ``fast`` the embedding lands minutes later and
+  # every visibility probe times out.
+  write_mode: strong
+  # Maximum time a fleet sibling will poll search before giving up on
+  # seeing the canary. With write_mode=strong the row should be visible
+  # immediately, but leave headroom for stale-read replicas.
+  visibility_timeout_ms: 30000
+  poll_interval_ms: 500
+  # Fraction of successfully-written facts to put through /redistribute.
+  redistribute_fraction: 0.5
+  max_in_flight: 8
+  tenant_id: null
+  fleet_id: null
+  foreign_fleet_id: null

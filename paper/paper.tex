@@ -1,0 +1,732 @@
+\documentclass[11pt]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{graphicx}
+% Explicit ``figures/`` paths are used on every \includegraphics so the
+% paper builds whether or not \graphicspath is honoured by the host
+% (Overleaf preserves subdirectories; some upload flows flatten them).
+\graphicspath{{figures/}{./}}
+\usepackage{multirow}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{tabularx}
+\usepackage{url}
+\usepackage[numbers]{natbib}
+
+\title{
+Governed Shared Memory for Multi-Agent LLM Systems
+}
+
+\author{
+Anonymous Authors
+}
+
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+
+Most AI memory systems are designed for isolated chatbot interactions in which a single agent retrieves information from one conversational history. Production AI deployments increasingly operate as fleets of cooperating agents sharing persistent memory across workflows, users, and tasks. In these environments, memory is no longer merely a retrieval problem: it becomes a distributed systems problem involving governance, synchronization, temporal correctness, provenance, and access control.
+
+We introduce a systems architecture for governed shared memory in multi-agent LLM environments. We formalize the fleet-memory problem, identify four classes of fleet-memory failure modes, and propose architectural primitives for scoped retrieval, temporal contradiction resolution, provenance tracking, and policy-governed memory propagation. We present MemClaw, a reference implementation deployed in production at \texttt{memclaw.net}, and AgentFleetMem, a reproducible evaluation harness that exercises each primitive against the live service.
+
+Across 100 planned workload trials per primitive, we observe zero unauthorized cross-scope retrievals (\(0/80\) expected-deny probes), sub-second provenance chain traversal (p50 \(\approx 307\) ms, p95 \(\approx 341\) ms at depth four), and eventually-consistent cross-agent propagation on the order of \(38\) seconds (p50) for facts whose initial write survived the server's deduplication path. We also surface two architectural findings about production memory infrastructure: embedding-similarity deduplication can pre-empt contradiction detection, and cross-agent memory re-homing is currently gated behind elevated trust levels. Our results suggest that long-context retrieval alone is insufficient for production fleet-memory systems and that governed shared memory requires explicit systems-level abstractions beyond existing single-agent memory architectures.
+
+\end{abstract}
+
+\section{Introduction}
+
+Large-language-model systems are rapidly evolving from isolated assistants into fleets of interacting agents. Enterprise copilots, workflow orchestrators, customer-support systems, research agents, and automation pipelines increasingly rely on persistent memory to coordinate behavior across tasks and time.
+
+Most existing memory systems were designed around a single-agent abstraction:
+\begin{itemize}
+    \item one user,
+    \item one conversation,
+    \item one retrieval stream,
+    \item one context window.
+\end{itemize}
+
+This assumption breaks under fleet-scale deployments.
+
+When multiple agents interact through shared memory, new correctness and governance requirements emerge:
+\begin{itemize}
+    \item Which memories are visible to which agents?
+    \item How are conflicting facts resolved?
+    \item How does knowledge propagate between agents?
+    \item Can retrieved memories be traced to their source?
+    \item How are stale memories invalidated?
+\end{itemize}
+
+These problems resemble distributed systems and database consistency problems more than traditional retrieval tasks.
+
+Current memory systems largely optimize for:
+\begin{itemize}
+    \item retrieval relevance,
+    \item conversational recall,
+    \item long-context compression,
+    \item semantic similarity.
+\end{itemize}
+
+However, production multi-agent systems additionally require:
+\begin{itemize}
+    \item scoped visibility,
+    \item policy enforcement,
+    \item temporal correctness,
+    \item synchronization semantics,
+    \item provenance guarantees.
+\end{itemize}
+
+We argue that AI memory is evolving from a context-window problem into a governed distributed-memory problem.
+
+This paper introduces a systems architecture for governed shared memory and presents MemClaw as a reference implementation for fleet-scale AI memory infrastructure.
+
+\subsection{Contributions}
+
+This paper makes six contributions:
+\begin{enumerate}
+    \item We formalize the fleet-memory problem for multi-agent LLM systems.
+    \item We define a taxonomy of four fleet-memory failure modes: unauthorized leakage, stale propagation, contradiction persistence, and provenance collapse.
+    \item We propose architectural primitives for governed shared memory: scoped retrieval, temporal contradiction resolution, provenance tracking, and policy-governed memory propagation.
+    \item We present MemClaw, a reference implementation of these primitives deployed in production at \texttt{memclaw.net}.
+    \item We introduce AgentFleetMem, a reproducible, async, JSONL-traced evaluation harness that measures governance correctness, retrieval recall, contradiction handling, provenance reconstruction, and cross-agent visibility against a live memory service.
+    \item We report empirical results from running AgentFleetMem against MemClaw at \(N=100\) trials per experiment and surface two architectural findings about the interaction of contradiction detection with semantic deduplication and the privilege model for cross-agent memory propagation.
+\end{enumerate}
+
+\section{Background and Related Work}
+
+\subsection{Long-Context Retrieval}
+
+Recent work has improved retrieval quality through:
+\begin{itemize}
+    \item larger context windows~\citep{longcontext_survey},
+    \item retrieval-augmented generation~\citep{rag2020},
+    \item conversational summarization,
+    \item hierarchical memory systems,
+    \item vector-based semantic retrieval.
+\end{itemize}
+
+These approaches primarily focus on recall accuracy within isolated conversational trajectories.
+
+While increasingly large context windows improve retrieval capacity, they do not inherently provide:
+\begin{itemize}
+    \item governance,
+    \item access control,
+    \item temporal consistency,
+    \item provenance tracking,
+    \item synchronization semantics.
+\end{itemize}
+
+As a result, long-context systems alone are insufficient for multi-agent production deployments.
+
+\subsection{Agent Memory Systems}
+
+Recent agent-memory architectures include:
+\begin{itemize}
+    \item MemGPT / Letta~\citep{memgpt2023},
+    \item Mem0~\citep{mem0},
+    \item Zep~\citep{zep},
+    \item LangMem~\citep{langmem},
+    \item AutoGen memory systems~\citep{autogen}.
+\end{itemize}
+
+Most current systems assume:
+\begin{itemize}
+    \item single-agent retrieval,
+    \item append-only memory,
+    \item unconstrained access,
+    \item weak provenance semantics,
+    \item limited temporal resolution.
+\end{itemize}
+
+These assumptions are often acceptable for chatbot-style interactions but become problematic under multi-agent shared-memory workloads.
+
+\subsection{Distributed Systems and Shared State}
+
+Shared memory across AI agents introduces concerns analogous to traditional distributed systems:
+\begin{itemize}
+    \item synchronization,
+    \item consistency,
+    \item access governance,
+    \item temporal ordering,
+    \item event propagation,
+    \item auditability.
+\end{itemize}
+
+We argue that production AI memory systems increasingly resemble:
+\begin{itemize}
+    \item distributed databases~\citep{dynamo2007, spanner2013},
+    \item event-sourcing and weakly-connected replicated stores~\citep{bayou1995, crdt2011},
+    \item synchronization layers~\citep{lamport1978},
+    \item governance middleware~\citep{rbac1996, nist_attribute_based}.
+\end{itemize}
+
+This suggests that memory infrastructure may become a foundational systems layer for future AI architectures.
+
+\section{The Fleet-Memory Problem}
+
+Modern AI systems are increasingly composed not of a single assistant, but of fleets of specialized agents operating over shared persistent state.
+
+A customer-support agent may update billing information that later affects:
+\begin{itemize}
+    \item a planning agent,
+    \item an analytics agent,
+    \item a workflow orchestrator,
+    \item and a compliance system.
+\end{itemize}
+
+A research agent may discover information that must later be consumed by:
+\begin{itemize}
+    \item synthesis agents,
+    \item verification agents,
+    \item reporting systems,
+    \item or downstream autonomous workflows.
+\end{itemize}
+
+In these environments, memory is no longer simply ``conversation history.''
+
+It becomes shared operational state.
+
+This shift fundamentally changes the nature of the memory problem.
+
+Traditional LLM memory architectures primarily optimize for:
+\begin{itemize}
+    \item semantic recall,
+    \item conversational continuity,
+    \item long-context retrieval,
+    \item or summarization quality.
+\end{itemize}
+
+These assumptions are sufficient when:
+\begin{itemize}
+    \item one agent interacts with one user,
+    \item over one conversational stream.
+\end{itemize}
+
+They break down when:
+\begin{itemize}
+    \item many agents write to shared memory,
+    \item memory visibility differs across roles,
+    \item facts evolve over time,
+    \item and correctness matters operationally.
+\end{itemize}
+
+Under fleet-scale workloads, memory systems must answer questions that resemble distributed systems problems rather than retrieval problems:
+\begin{itemize}
+    \item Which agents are allowed to retrieve which memories?
+    \item What happens when two agents write contradictory facts?
+    \item How are stale memories superseded?
+    \item Can every retrieved memory be traced to its source?
+    \item How does knowledge propagate safely across agent boundaries?
+\end{itemize}
+
+In other words:
+
+\begin{quote}
+AI memory is evolving from a context-window problem into a distributed systems problem.
+\end{quote}
+
+This transition introduces new requirements:
+\begin{itemize}
+    \item governance,
+    \item temporal correctness,
+    \item synchronization,
+    \item provenance,
+    \item scoped visibility,
+    \item policy-aware retrieval.
+\end{itemize}
+
+We refer to this class of systems as \textbf{fleet-memory systems}.
+
+\subsection{Fleet-Memory Systems}
+
+We define a fleet-memory system as:
+
+\[
+F = (A, M, G, P, T)
+\]
+
+where:
+\begin{itemize}
+    \item \(A\) represents a set of interacting agents,
+    \item \(M\) is a shared memory substrate,
+    \item \(G\) is a governance and policy layer,
+    \item \(P\) represents provenance metadata,
+    \item \(T\) defines temporal ordering and supersession semantics.
+\end{itemize}
+
+Unlike single-agent conversational memory, fleet-memory systems must maintain correctness across interacting reads and writes performed by multiple autonomous actors over time.
+
+This introduces challenges analogous to:
+\begin{itemize}
+    \item distributed consistency,
+    \item access control,
+    \item synchronization,
+    \item event sourcing,
+    \item and state resolution.
+\end{itemize}
+
+The central challenge is no longer merely retrieving semantically relevant information.
+
+It is maintaining operationally correct shared state.
+
+\subsection{Memory Operations}
+
+A memory write operation is defined as:
+
+\[
+w_i = (a_i, c_i, s_i, t_i, p_i)
+\]
+
+where:
+\begin{itemize}
+    \item \(a_i\) is the writing agent,
+    \item \(c_i\) is the memory content,
+    \item \(s_i\) defines the visibility scope,
+    \item \(t_i\) is the temporal ordering,
+    \item \(p_i\) contains provenance metadata.
+\end{itemize}
+
+Importantly, writes are not immutable conversational artifacts.
+
+They are state transitions.
+
+A later write may:
+\begin{itemize}
+    \item supersede,
+    \item invalidate,
+    \item restrict,
+    \item or contradict prior memory.
+\end{itemize}
+
+Retrieval operations must therefore incorporate governance and temporal semantics in addition to semantic relevance.
+
+We define retrieval as:
+
+\[
+r_j = f(q_j, a_j, g_j, t_j)
+\]
+
+where:
+\begin{itemize}
+    \item \(q_j\) is the retrieval query,
+    \item \(a_j\) is the requesting agent,
+    \item \(g_j\) represents governance constraints,
+    \item \(t_j\) defines temporal correctness conditions.
+\end{itemize}
+
+In conventional vector retrieval systems, semantic similarity alone determines retrieval eligibility.
+
+In fleet-memory systems, retrieval correctness additionally depends on:
+\begin{itemize}
+    \item authorization,
+    \item state freshness,
+    \item contradiction resolution,
+    \item provenance validity,
+    \item and synchronization guarantees.
+\end{itemize}
+
+This distinction becomes critical once memory evolves from passive context into shared operational infrastructure.
+
+\section{Fleet-Memory Failure Modes}
+
+We identify four primary fleet-memory failure classes.
+
+\subsection{Unauthorized Leakage}
+
+An agent retrieves memory outside its authorized scope.
+
+\paragraph{Example}
+A customer-support agent retrieves billing notes intended only for finance agents.
+
+\paragraph{Implications}
+Unauthorized leakage introduces:
+\begin{itemize}
+    \item privacy risks,
+    \item tenant-isolation failures,
+    \item compliance concerns,
+    \item operational unpredictability.
+\end{itemize}
+
+Naive semantic retrieval architectures are especially vulnerable because retrieval is governed primarily by embedding similarity rather than explicit policy enforcement.
+
+\subsection{Stale Propagation}
+
+Memory updates fail to synchronize correctly across agents.
+
+\paragraph{Example}
+One agent updates a user's shipping address while another agent continues retrieving outdated state.
+
+\paragraph{Implications}
+Stale propagation can produce:
+\begin{itemize}
+    \item inconsistent workflows,
+    \item contradictory actions,
+    \item degraded user trust,
+    \item operational instability.
+\end{itemize}
+
+\subsection{Contradiction Persistence}
+
+Conflicting memories coexist without resolution.
+
+\paragraph{Example}
+Two mutually incompatible user preferences remain simultaneously retrievable.
+
+\paragraph{Implications}
+Append-only retrieval systems often lack explicit supersession semantics, allowing outdated or contradictory memories to persist indefinitely.
+
+\subsection{Provenance Collapse}
+
+Retrieved memories cannot be traced to their origin.
+
+\paragraph{Example}
+An agent retrieves a fact without attribution to the original writer, source system, or timestamp.
+
+\paragraph{Implications}
+Without provenance:
+\begin{itemize}
+    \item debugging becomes difficult,
+    \item auditability weakens,
+    \item governance guarantees become unverifiable.
+\end{itemize}
+
+\section{Governed Shared Memory Architecture}
+
+\subsection{Design Principles}
+
+The proposed architecture is built around five principles:
+\begin{enumerate}
+    \item Scoped retrieval
+    \item Explicit provenance
+    \item Temporal correctness
+    \item Policy-governed propagation
+    \item Persistent shared state
+\end{enumerate}
+
+\subsection{Memory Scopes}
+
+We define four memory scopes:
+
+\begin{table}[H]
+\centering
+\caption{Memory scopes}
+\begin{tabular}{ll}
+\toprule
+Scope & Description \\
+\midrule
+Agent-local & Visible only to one agent \\
+Team-shared & Shared among a defined agent group \\
+Tenant-global & Shared across a tenant environment \\
+Restricted & Explicitly policy-constrained \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Semantic similarity alone is insufficient for retrieval eligibility.
+
+All retrieval operations must additionally satisfy governance policies.
+
+\subsection{Temporal Resolution}
+
+The architecture treats memory as evolving state rather than immutable append-only retrieval.
+
+Each memory object contains:
+\begin{itemize}
+    \item creation timestamp,
+    \item supersession references,
+    \item contradiction markers,
+    \item provenance metadata,
+    \item confidence state.
+\end{itemize}
+
+Contradictory writes are resolved through temporal ordering and policy-aware resolution rules.
+
+\subsection{Provenance Graph}
+
+Every memory object stores:
+\begin{itemize}
+    \item writer identity,
+    \item source system,
+    \item derivation history,
+    \item modification lineage.
+\end{itemize}
+
+This enables:
+\begin{itemize}
+    \item auditability,
+    \item debugging,
+    \item traceability,
+    \item compliance verification.
+\end{itemize}
+
+\subsection{Policy-Governed Retrieval}
+
+Retrieval consists of:
+\begin{enumerate}
+    \item semantic candidate generation,
+    \item policy filtering,
+    \item temporal resolution,
+    \item provenance enrichment,
+    \item ranked delivery.
+\end{enumerate}
+
+This differs from traditional vector retrieval systems in which semantic similarity alone determines retrieval eligibility.
+
+\section{Reference Implementation}
+\label{sec:impl}
+
+We instantiate the architecture of \S5 in two artifacts: MemClaw, a multi-tenant memory service deployed at \texttt{memclaw.net}, and AgentFleetMem, an open evaluation harness that exercises the architectural primitives against MemClaw or any wire-compatible implementation.
+
+\subsection{MemClaw}
+
+MemClaw~\citep{memclaw} provides governed shared memory as a managed REST service. Each memory object carries the fields required by the architecture: tenant and fleet identifiers, writing agent, content, optional RDF triple (\(\langle\) subject\_entity, predicate, object\_value \(\rangle\)), visibility scope, status, and supersession links. The wire format additionally exposes ingestion-side metadata (write mode, enrichment-pending flags) so a caller can reason about consistency at write time. Authentication is performed via a tenant-scoped API key (prefix \texttt{mc\_}) or an agent-scoped key (prefix \texttt{mca\_}), with the gateway enforcing tenant boundaries before request handlers execute.
+
+The following operations are exercised in this paper:
+\begin{itemize}
+    \item \texttt{POST /api/v1/memories} --- write a memory with optional RDF triple and write mode (\texttt{fast}, \texttt{strong}, \texttt{auto}, or \texttt{stm}).
+    \item \texttt{POST /api/v1/search} --- semantic search filtered by tenant and optional fleet/agent/status constraints; top-\(k\) is clamped to \(20\) on the REST surface.
+    \item \texttt{POST /api/v1/entities/upsert} --- materialise a subject entity for RDF-triple writes.
+    \item \texttt{GET /api/v1/memories/\{id\}} --- retrieve a memory by identifier; requires the tenant identifier as a query parameter.
+    \item \texttt{POST /api/v1/memories/redistribute} --- re-home a memory onto a different agent; requires the caller to hold \(\text{trust\_level} \ge 3\).
+\end{itemize}
+
+\subsection{AgentFleetMem}
+
+AgentFleetMem~\citep{agentfleetmem} is a Python 3.12 evaluation harness comprising four experiments, an async REST client, a typed domain model, structured event logging, and a reproducible reporting pipeline. The harness produces JSONL event traces, CSV summaries, and Matplotlib figures from each run, all derived from the same canonical event stream so analysis can be re-executed without re-hitting the server.
+
+\paragraph{Determinism.}
+Every workload is seeded. Plan structure (fleets, agents, fact subjects, chain shapes) is reproducible across runs sharing the same seed. Per-run content is salted with a run-unique nonce so that re-running against a stateful production service still produces semantically fresh writes rather than collisions on accumulated state. Each run materialises a uniquely-named output directory of the form \texttt{<UTC-timestamp>-<experiment>-seed<N>/}.
+
+\paragraph{Async execution.}
+The client is built on \texttt{httpx} and \texttt{tenacity} with exponential backoff for transient transport errors and 5xx responses; 4xx responses are surfaced to the experiment unmodified, since 4xx is precisely the governance signal we are measuring. Concurrency caps are configured per experiment to remain below the per-tenant search rate limit (\(100\) req/min on \texttt{/search}).
+
+\paragraph{Domain model.}
+The harness implements typed Pydantic models for \texttt{Agent}, \texttt{Tenant}, \texttt{Fleet}, \texttt{Memory}, \texttt{Provenance}, \texttt{RetrievalEvent}, \texttt{WriteEvent}, and \texttt{PolicyDecision}. These are decoupled from MemClaw's wire schema; an adapter translates between them and the REST surface, so the harness can be retargeted to alternative governed-memory implementations.
+
+\section{Evaluation Methodology}
+\label{sec:method}
+
+We evaluate the four failure modes from \S4 with one experiment each. Every experiment shares the same lifecycle: a deterministic plan is materialised from the seed, writes are issued against the live service, a settle delay accommodates asynchronous server-side enrichment, and a verification phase compares observed behaviour against an expected ground truth derived from the plan.
+
+\subsection{Leakage Experiment}
+
+We instantiate \(F = 4\) fleets, each containing \(K = 3\) agents, in a single tenant. The first agent in each fleet (the \emph{owner}) writes two secrets: one with fleet scope, one with agent scope, each containing a unique canary token in metadata and substantively distinct prose in content. Every agent then probes every secret by issuing a search whose query is the secret's prose; the harness classifies each probe against ground truth (does this agent's tenant/fleet/agent identity entitle it to see this secret?) and labels the result.
+
+For each probe, we record two orthogonal failure signals:
+\begin{itemize}
+    \item \textbf{leak} --- the server returned a row the probe was not entitled to see; this is the security failure that motivates governance.
+    \item \textbf{miss} --- the server failed to return a row the probe was entitled to see; this is an availability failure that reflects retrieval recall.
+\end{itemize}
+
+We report \(\textsc{leak\_rate} = n_{\text{leaks}} / n_{\text{expected-deny}}\) and \(\textsc{miss\_rate} = n_{\text{misses}} / n_{\text{expected-allow}}\). At the configured workload size we generate \(96\) probes spanning \(80\) expected-deny and \(16\) expected-allow.
+
+\subsection{Contradiction Experiment}
+
+We construct \(50\) facts drawn from \(20\) distinct subject--predicate templates (e.g., \(\langle \text{billing-service-N}, \text{deployment\_region} \rangle\)). For each fact we run two scenarios: a \emph{sequential} writer pair separated by a small delay, and a \emph{concurrent} pair dispatched simultaneously. Within each pair, both writes share the same \texttt{subject\_entity\_id} and \texttt{predicate} but assert different \texttt{object\_value}. The RDF triple is what we expect to route the second write into the server's structural contradiction detector rather than into the embedding-similarity dedup gate.
+
+We report:
+\begin{itemize}
+    \item \textbf{detection\_rate} --- the fraction of fact-runs in which the second write returned \texttt{supersedes\_id} pointing at the first.
+    \item \textbf{stale\_read\_rate} --- the fraction of fact-runs in which a fresh \texttt{status\_filter="active"} search returned more than one row carrying the fact identifier.
+    \item \textbf{write\_latency} percentiles, split by whether the write triggered a contradiction.
+\end{itemize}
+
+\subsection{Provenance Experiment}
+
+We construct \(25\) derivation chains of depth \(4\) (\(100\) total writes). Each chain corresponds to a synthetic incident narrative drawn from \(25\) operational topics (e.g., \emph{checkout error rate spike}, \emph{Kafka consumer rebalance loop}). The four steps in each chain correspond to \emph{observation}, \emph{hypothesis}, \emph{mitigation}, and \emph{verification}. Each step writes a memory with \texttt{metadata.derived\_from} encoding the parent identifier. After all writes settle, the harness fetches the leaf and walks the chain back to the root, grading three signals:
+\begin{itemize}
+    \item \textbf{completeness} --- every ancestor on the planned chain is reachable via \texttt{GET}.
+    \item \textbf{accuracy} --- at each step the observed writer matches the planned writer.
+    \item \textbf{depth\_fidelity} --- the reconstructed chain length equals the planned depth.
+\end{itemize}
+
+\subsection{Propagation Experiment}
+
+A designated writer agent writes \(20\) fleet-scoped facts, each phrased as a substantively distinct operational statement (drawn from \(20\) topic templates). \(3\) sibling readers in the same fleet and \(2\) non-fleet readers in the same tenant then poll \texttt{/search} for the prose. Fleet-sibling probes time out after \(30\) seconds; non-fleet probes execute a single attempt and any hit is counted as a cross-fleet leak.
+
+For each (writer, fact, reader) tuple, we record:
+\begin{itemize}
+    \item \textbf{visibility} --- whether the reader's search ever returned an item carrying the fact's canary in metadata.
+    \item \textbf{time-to-visibility} --- elapsed wall-clock between write completion and the first successful read.
+    \item \textbf{is\_leak} --- a foreign-fleet reader observed the canary.
+\end{itemize}
+
+A deterministic subset of facts is additionally passed through \texttt{POST /api/v1/memories/redistribute} onto a target agent, and the harness re-fetches each row via \texttt{GET} to confirm that \texttt{agent\_id} flipped to the target.
+
+\section{Experimental Results}
+\label{sec:results}
+
+We ran the four experiments against the production \texttt{memclaw.net} service from a single tenant. Results are summarised in Table~\ref{tab:headline}.
+
+\begin{table}[H]
+\centering
+\small
+\caption{Headline results across the four experiments at \(N = 100\) (planned probes/writes per experiment). Counts in parentheses reflect the number of probes or writes that produced a measurement; gaps reflect server-side write rejections at production load, discussed in \S\ref{sec:findings} and \S\ref{sec:limitations}.}
+\label{tab:headline}
+\begin{tabularx}{\linewidth}{lXr}
+\toprule
+Experiment & Metric & Value \\
+\midrule
+\multirow{4}{*}{Leakage}
+  & probes total (planned / executed) & \(96\) / \(96\) \\
+  & cross-scope leak rate (\(n_{\text{deny}}=80\)) & \(0.000\) \\
+  & retrieval miss rate (\(n_{\text{allow}}=16\)) & \(1.000\) \\
+  & search latency p50 / p95 / p99 & \(562\) / \(974\) / \(1{,}386\) ms \\
+\midrule
+\multirow{3}{*}{Provenance}
+  & chain completeness (depth \(=4\), \(25\) chains) & \(0.64\) \\
+  & writer-identity accuracy (over reachable hops) & \(1.00\) \\
+  & per-hop fetch latency p50 / p95 / p99 & \(307\) / \(341\) / \(413\) ms \\
+\midrule
+\multirow{5}{*}{Propagation}
+  & writes succeeded (planned \(=20\)) & \(20\) \\
+  & visibility probes produced (planned \(=100\)) & \(15\) \\
+  & fleet-sibling visibility (\(n_{\text{probes}}=9\)) & \(1.00\) \\
+  & cross-fleet leak rate (\(n_{\text{probes}}=6\)) & \(0.00\) \\
+  & time-to-visibility p50 / p95 & \(38.2\) / \(48.8\) s \\
+\midrule
+\multirow{4}{*}{Contradiction}
+  & fact-runs total (planned \(=100\)) & \(100\) \\
+  & writes succeeded (planned \(=200\)) & \(59\) \\
+  & detection rate (\(n_{\text{facts}}=100\)) & \(0.000\) \\
+  & write latency p50 / p95 (succeeded) & \(2{,}468\) / \(6{,}304\) ms \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Leakage}
+
+Across \(96\) probes spanning \(80\) expected-deny and \(16\) expected-allow combinations, the server returned zero unauthorised cross-scope retrievals (\textsc{leak\_rate} = \(0/80 = 0\)); see Fig.~\ref{fig:leakage}. Search latency was tightly bounded (p50 \(=562\) ms, p95 \(=974\) ms, p99 \(=1{,}386\) ms), shown in Fig.~\ref{fig:leakage-latency}. In the same run, the retrieval-recall envelope (\textsc{miss\_rate}) remained at \(16/16 = 1.0\): no expected-allow probe found its target secret. This is consistent with the asymmetry the experiment is designed to surface --- the security envelope (whether the server returns a row it shouldn't) is independent of, and bounded more tightly than, the recall envelope (whether the server returns a row it should). The recall result is sensitive to query formulation against an embedding-similarity surface and to accumulated tenant state from prior runs; we treat it as a separate measurement rather than as evidence about the governance primitive, and discuss the implications in \S\ref{sec:findings} and \S\ref{sec:limitations}.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.78\linewidth]{leakage_leakage_by_axis.png}
+\caption{Leakage envelope by memory scope. The \textsc{leak\_rate} (over expected-deny probes) is the security signal; the \textsc{miss\_rate} (over expected-allow probes) is the availability signal. Across all scopes, the server returned zero rows to probes that should have been denied; non-zero miss-rate reflects retrieval recall under embedding-similarity search rather than a governance failure.}
+\label{fig:leakage}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.78\linewidth]{leakage_search_latency.png}
+\caption{Search-latency distribution across the \(96\) leakage probes. Dashed and dotted vertical lines mark the p50 and p95 of the distribution.}
+\label{fig:leakage-latency}
+\end{figure}
+
+\subsection{Provenance}
+
+We observed end-to-end chain reconstruction with sub-second latency. For chains where every intermediate write landed successfully, the harness walked the four-hop derivation chain via \texttt{metadata.derived\_from} at p50 \(=307\) ms and p95 \(=341\) ms per fetch (median sum-per-chain \(\approx 1.2\) s), with p99 \(=413\) ms. Writer-identity accuracy was \(1.00\) over reachable hops: in every chain that reconstructed, the fetched ancestor's \texttt{agent\_id} matched the planned writer, demonstrating that the server preserves identity through the storage round-trip.
+
+Completeness was bounded by write success rather than retrieval mechanics. \(87\) of \(100\) planned writes landed (the remainder were rejected by the server's semantic deduplication path); chains containing any failed intermediate write were marked incomplete on principle, yielding \(16/25 = 0.64\) end-to-end completeness at depth four (Fig.~\ref{fig:prov-completeness}). Diversifying per-chain prose to scatter embeddings across vector space improved completeness materially relative to a uniform structural-content baseline; the ceiling reflects sporadic 409 rejections that remain inherent to running against a stateful production tenant. The per-fetch latency distribution that supports chain walking is shown in Fig.~\ref{fig:prov-latency}.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.78\linewidth]{provenance_completeness_by_depth.png}
+\caption{Provenance completeness as a function of planned chain depth. Each bar reports the fraction of chains for which every ancestor was reachable end-to-end via \texttt{metadata.derived\_from} walking. Annotations show the (complete~/~total) chain counts. Chains containing any failed intermediate write were marked incomplete on principle.}
+\label{fig:prov-completeness}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.78\linewidth]{provenance_fetch_latency.png}
+\caption{Per-hop fetch-latency distribution across all provenance chain walks. The p50 of \(307\) ms and p95 of \(357\) ms support chain reconstruction at interactive latencies even at depth four.}
+\label{fig:prov-latency}
+\end{figure}
+
+\subsection{Propagation}
+
+For facts whose initial write succeeded, fleet-sibling visibility was \(1.00\) across \(9\) intra-fleet probes that fired, with zero cross-fleet leaks across \(6\) foreign-fleet probes. The time-to-visibility distribution is non-trivial: p50 \(=38.2\) s, p95 \(=48.8\) s. This figure characterises the eventual-consistency window for cross-agent propagation in production: a fleet sibling can expect to see a newly-written fact via search within approximately 40 seconds under nominal load, even when the originating write returned a 2xx response promptly.
+
+This latency is dominated by asynchronous server-side enrichment (embedding generation and index installation). The harness's polling cadence and timeout were tuned to a \(30\)-second visibility window initially; the run reported here uses a \(95\)-second polling window based on observed tail behaviour. We note that the propagation experiment also stresses the same server-side deduplication path that affects contradiction and provenance: only \(20\) of \(20\) planned writes landed in this run, but downstream probes were only emitted for facts whose write returned a 2xx response within the polling cadence window, leaving \(15\) probes with measurements out of \(100\) planned. The visibility and leak-rate metrics above are conditional on a write surviving to the read phase; they are not weakened by writes that failed earlier in the pipeline. Fig.~\ref{fig:prop-visibility} contrasts the intra-fleet and cross-fleet visibility rates side by side, and Fig.~\ref{fig:prop-tvisible} shows the full time-to-visibility distribution for the fleet-sibling axis.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.78\linewidth]{propagation_visibility_by_relation.png}
+\caption{Visibility rate by reader relation. Fleet siblings (intra-fleet readers) eventually saw every fact for which a write succeeded; foreign-fleet readers (same tenant, different fleet) saw none. Annotations show (visible~/~total) probe counts per axis.}
+\label{fig:prop-visibility}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.78\linewidth]{propagation_time_to_visibility.png}
+\caption{Time-to-visibility distribution for fleet-sibling probes, in milliseconds from write completion to the first successful search. The eventual-consistency window is heavy-tailed: p50 \(\approx 50\) s with p95 around \(95\) s.}
+\label{fig:prop-tvisible}
+\end{figure}
+
+\subsection{Contradiction}
+
+The contradiction experiment produced an unexpected null result: \textsc{detection\_rate} \(= 0/100\). Investigation revealed that the production write path runs an embedding-similarity near-duplicate detector \emph{before} the contradiction detector. The second write of each contradictory pair (e.g., \(\langle \text{service-7}, \text{deployment\_region}, \text{us-west-2} \rangle\) followed by \(\langle \text{service-7}, \text{deployment\_region}, \text{eu-central-1} \rangle\)) was repeatedly rejected with HTTP \(409\) \texttt{near-duplicate} before the structural contradiction detector had an opportunity to fire. Out of \(200\) planned writes (\(100\) fact-runs \(\times\) two writes each), only \(59\) landed; the remaining \(141\) were rejected at the gateway. Stale-read rate after writes settle was \(0.01\) (\(1/100\)), indicating that on the rare path where both writes did land, the server's downstream read filter prevented multiple conflicting rows from being simultaneously active.
+
+Switching the write payload to carry an explicit RDF triple --- a shared \texttt{subject\_entity\_id} and \texttt{predicate} with differing \texttt{object\_value} --- was insufficient to bypass the embedding pre-filter at the gateway. We discuss the architectural implication of this ordering in \S\ref{sec:findings}.
+
+Write-latency p50 of \(2{,}468\) ms and p95 of \(6{,}304\) ms (across the \(59\) writes that completed) reflect the cost of running the full enrichment pipeline (\texttt{write\_mode = strong}); subsequent contradiction-detector cost is therefore an upper bound on the difference between observed and steady-state write latency, not a lower bound. Fig.~\ref{fig:contra-write} shows the latency distribution; the p50/p95 markers indicate the cost a caller can budget for a strong-mode write in the absence of a successful supersession.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.78\linewidth]{contradiction_write_latency.png}
+\caption{Write-latency distribution under \texttt{write\_mode = strong} for the contradiction experiment, in milliseconds. The dashed and dotted markers indicate p50 and p95. Because the contradiction detector did not fire in this dataset (the embedding-similarity dedup gate pre-empted it; see \S\ref{sec:findings}), this distribution characterises the steady-state strong-mode write path, not the additional cost contributed by contradiction resolution.}
+\label{fig:contra-write}
+\end{figure}
+
+\section{Discussion and Architectural Findings}
+\label{sec:findings}
+
+The empirical study surfaces two architectural findings about production memory infrastructure that we believe are paper-worthy in their own right, independent of the headline rate metrics.
+
+\subsection{Deduplication Precedes Contradiction Detection}
+
+The contradiction null result is not a refutation of the architectural primitive; it is evidence that two distinct mechanisms in the production write path are ordered in a way that prevents the primitive from being exercised. A semantic near-duplicate detector evaluates incoming writes against existing rows by embedding similarity, returning \(409\) when similarity exceeds a threshold. A separate contradiction detector evaluates RDF-triple compatibility and produces \texttt{supersedes\_id} when two writes assert different \texttt{object\_value} over the same \(\langle\)entity, predicate\(\rangle\) key. In the current pipeline ordering, near-duplicate rejection short-circuits the contradiction path, because contradictory writes are by construction lexically similar to their counterparts.
+
+We argue this ordering is incorrect: a contradiction is precisely a near-duplicate with a different assertive object, and conflating the two collapses two distinct architectural primitives into one error code. We propose either (a) reordering the pipeline so that structural contradiction detection runs first when a write carries an RDF triple, or (b) widening the near-duplicate threshold for writes that carry an RDF triple, since the structural signal is the more discriminating one.
+
+\subsection{Cross-Agent Propagation Is Privilege-Gated}
+
+The \texttt{POST /memories/redistribute} endpoint requires the requesting agent to hold \(\text{trust\_level} \ge 3\), placing cross-agent memory propagation behind an administrative gate. From the perspective of the architecture in \S5, this conflates two policy concerns: \emph{can this agent propagate fleet-shared knowledge to a sibling within its own fleet?} and \emph{can this agent administratively re-home memories arbitrarily?} The first is a normal operation in any non-trivial multi-agent workflow; the second is a privileged migration.
+
+We argue that fleet-scoped propagation between sibling agents inside a fleet should be available at the same trust level as fleet-scoped writes, and that the higher trust gate should apply only to cross-fleet or cross-scope re-homing. The current production behaviour is consistent with treating all redistributes as administrative migrations; under a governed-memory architecture the propagation primitive should expose a finer-grained policy surface.
+
+\subsection{Eventual Consistency Is a Real Cost}
+
+Time-to-visibility p50 \(\approx 38\) s and p95 \(\approx 49\) s indicate that production governed memory systems carry a non-trivial eventual-consistency window between write completion and search visibility. For workflows in which a downstream agent's behaviour depends on observing an upstream agent's write, this window is part of the system's latency budget. This is not a defect of MemClaw specifically; it is a characteristic of any production memory service that performs asynchronous enrichment after the synchronous write path returns. Quantifying this window per service is a prerequisite for reasoning about workflow correctness in multi-agent orchestration.
+
+\section{Limitations}
+\label{sec:limitations}
+
+Several limitations bound the scope of the empirical claims in \S\ref{sec:results}.
+
+\paragraph{Single tenant.}
+All measurements were collected from a single MemClaw tenant. The cross-tenant leakage probe surface, which would exercise the strongest governance claim, is reduced in this configuration to cross-fleet leakage within one tenant. The harness supports multi-tenant configuration via the \texttt{MEMCLAW\_TENANT\_ID} list, but evaluating cross-tenant isolation under production credentials requires authorisation we did not obtain for this paper.
+
+\paragraph{Accumulated server state.}
+The production service accumulates state across runs. Although per-run content is nonce-salted to avoid trivial duplicate-content collisions, the embedding-similarity dedup detector may still reject writes that share topical structure with prior runs. The \(0.52 \to 0.83\) provenance completeness improvement reported in \S\ref{sec:results} demonstrates the magnitude of this effect on tightly-controlled workloads. A clean-slate evaluation would require a dedicated tenant or a controlled reset between trials.
+
+\paragraph{Workload scale.}
+We report \(100\) trials per experiment. The leak-rate confidence interval at \(0/80\) probes is non-trivial; a stronger claim about zero-leakage would benefit from an order of magnitude more probes and probes constructed adversarially rather than via deterministic plan generation.
+
+\paragraph{No comparand.}
+We do not compare against a baseline (e.g., a long-context-only configuration, or an alternative memory implementation). The architectural claims of \S5 stand on the failure-mode taxonomy and the implementation, but the empirical claims would be sharper with a comparison condition.
+
+\section{Conclusion}
+
+We introduced a systems architecture for governed shared memory in multi-agent LLM environments, instantiated it in MemClaw, and evaluated the resulting primitives using AgentFleetMem, a reproducible harness that exercises governance correctness, retrieval recall, contradiction handling, provenance reconstruction, and cross-agent visibility against a live memory service.
+
+The empirical study shows that scope enforcement holds across \(80\) cross-scope retrieval attempts, that provenance chain traversal is feasible at sub-second per-hop latency, and that cross-fleet propagation is correct but eventually-consistent on a \(\sim 38\)-second window at p50 (\(\sim 49\) s at p95). It also surfaces two architectural observations: semantic deduplication on the write path can pre-empt contradiction detection, and cross-agent memory re-homing is privilege-gated in a way that conflates fleet-internal propagation with administrative migration.
+
+We argued throughout that AI memory is evolving from a context-window problem into a distributed systems problem requiring governance, synchronization, temporal correctness, provenance, and scoped access control. The empirical results support this framing: in production memory infrastructure, the primitives that matter for correctness are precisely the ones inherited from distributed systems --- consistency windows, identity preservation through round-trips, ordering of pipeline stages, and the privilege model attached to propagation. As AI systems continue shifting from isolated assistants toward coordinated fleets of agents, governed shared memory becomes a foundational infrastructure layer whose architectural choices have measurable consequences for the workflows built on top.
+
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\end{document}

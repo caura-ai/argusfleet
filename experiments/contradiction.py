@@ -1,0 +1,595 @@
+"""Temporal contradiction experiment.
+
+What the experiment measures
+----------------------------
+When two memories assert contradictory facts about the same subject —
+written by different agents at staggered or concurrent times — a
+correct memory service must:
+
+1. **Detect** the conflict on the second write (the response should
+   declare the second memory as superseding the first).
+2. **Resolve** it durably (the older row's status flips to a
+   non-``active`` value and the newer row carries ``supersedes_id``
+   pointing back).
+3. **Prevent stale reads** (a fresh ``status_filter="active"`` search
+   for the subject must not return the older fact).
+
+The experiment runs two scenarios per fact:
+
+- ``sequential`` — agent A writes value_1, the harness waits a short
+  pause, then agent B writes the contradictory value_2.
+- ``concurrent`` — both writes are dispatched in the same ``gather``
+  batch with no inter-write delay. Tests race-handling.
+
+Outputs
+-------
+- ``events.jsonl`` — writes (with supersedes_id / superseded_by captured),
+  search probes, and resolution checks.
+- ``contradictions.csv`` — one row per (fact, scenario) pair.
+- ``summary.csv`` — detection rate, stale-read rate, write-latency
+  percentiles split by ``had_contradiction``.
+- ``detection_rate.png`` — bar chart, sequential vs concurrent.
+- ``write_latency.png`` — write-latency histogram, contradiction vs not.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import random
+import uuid
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+import pandas as pd
+
+from agentfleetmem.experiments._common import bar_chart_from_frame
+from agentfleetmem.harness.client import MemClawClient, MemClawError
+from agentfleetmem.harness.config import HarnessConfig
+from agentfleetmem.harness.metrics import (
+    events_to_frame,
+    read_jsonl,
+    summarize_latency,
+    write_csv,
+)
+from agentfleetmem.harness.plots import plot_latency_hist
+from agentfleetmem.harness.runner import (
+    make_run_dir,
+    open_sink_with_envelope,
+    run_with_client,
+)
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------- #
+# Plan                                                                    #
+# ---------------------------------------------------------------------- #
+
+
+@dataclass(slots=True)
+class _ContradictionFact:
+    """One subject with two contradictory values.
+
+    Both writes target the same fleet so the contradiction detector can
+    even consider them — cross-fleet writes would be a leakage scenario,
+    not a contradiction scenario.
+
+    ``predicate`` + ``value_a``/``value_b`` are written as RDF triple
+    fields (``subject_entity_id``, ``predicate``, ``object_value``).
+    Sharing ``subject_entity_id`` + ``predicate`` across two writes with
+    different ``object_value`` is the deterministic signal the server's
+    structural contradiction detector looks for — and it sidesteps the
+    embedding-similarity gate that otherwise 409s the second write.
+    """
+
+    fact_id: str
+    tenant_id: str
+    fleet_id: str
+    agent_a: str
+    agent_b: str
+    subject: str  # human-readable, used as entity canonical_name
+    predicate: str
+    value_a: str
+    value_b: str
+    scenario: str  # "sequential" | "concurrent"
+
+
+def _build_facts(cfg: HarnessConfig, *, nonce: str) -> list[_ContradictionFact]:
+    rng = random.Random(cfg.seed)
+    exp = cfg.experiment or {}
+    n_facts: int = int(exp.get("n_facts", 8))
+    scenarios: list[str] = list(exp.get("scenarios", ["sequential", "concurrent"]))
+    tenant_id: str = (
+        (cfg.tenant_ids[0] if cfg.tenant_ids else None)
+        or exp.get("tenant_id")
+        or f"mc_ctr_{cfg.seed}"
+    )
+    fleet_id: str = exp.get("fleet_id") or "fleet_ctr"
+
+    # Subject templates are paired with the RDF ``predicate`` the
+    # contradiction will be expressed over. Two writes for the same
+    # fact share ``(subject_entity_id, predicate)`` but assert different
+    # ``object_value`` — the deterministic signal the server's
+    # structural contradiction detector watches for.
+    templates: list[tuple[str, str, list[str]]] = [
+        ("billing-service-{n}", "deployment_region", ["us-west-2", "eu-central-1", "ap-south-1"]),
+        ("ingest-team-{n}", "primary_oncall", ["alice", "bob", "carol"]),
+        ("project-{n}", "oltp_database", ["postgres", "mysql", "cockroachdb"]),
+        ("tenant-cluster-{n}", "auth_provider", ["auth0", "okta", "cognito"]),
+        ("merchant-store-{n}", "payment_processor", ["stripe", "adyen", "braintree"]),
+        ("marketing-site-{n}", "cdn_provider", ["cloudflare", "fastly", "akamai"]),
+        ("postmortem-{n}", "severity", ["sev1", "sev2", "sev3"]),
+        ("customer-segment-{n}", "data_residency", ["EU", "US", "APAC"]),
+        ("prod-cluster-{n}", "ingress_controller", ["nginx", "traefik", "haproxy"]),
+        ("queue-worker-{n}", "message_broker", ["kafka", "rabbitmq", "pulsar"]),
+        ("service-{n}", "runtime_version", ["python-3.12", "python-3.13", "nodejs-20"]),
+        ("monitoring-stack-{n}", "observability_vendor", ["datadog", "newrelic", "honeycomb"]),
+        ("engineering-seat-{n}", "license_type", ["enterprise", "team", "individual"]),
+        ("canary-deploy-{n}", "acceptance_threshold", ["95", "99", "99.9"]),
+        ("log-stream-{n}", "retention_days", ["7", "30", "365"]),
+        ("stateful-set-{n}", "primary_az", ["us-east-1a", "us-east-1b", "us-east-1c"]),
+        ("archive-bucket-{n}", "compression_codec", ["zstd", "gzip", "snappy"]),
+        ("product-taxonomy-{n}", "source_of_truth", ["pim", "erp", "ldap"]),
+        ("high-priority-job-{n}", "dispatch_policy", ["fifo", "priority", "fair"]),
+        ("tenant-namespace-{n}", "secret_backend", ["vault", "kms", "doppler"]),
+    ]
+
+    facts: list[_ContradictionFact] = []
+    for i in range(n_facts):
+        template_subject, predicate, choices = templates[i % len(templates)]
+        # Embed the run nonce into the subject — keeps the two values
+        # within a fact contradictory (same subject, different values)
+        # while making each *run's* entity name unique so a re-run gets
+        # fresh entities instead of replaying yesterday's state.
+        subject = template_subject.format(n=i) + f"-{nonce[-12:]}"
+        # Always pick two distinct values so the writes are genuinely
+        # contradictory; ``random.sample`` enforces uniqueness.
+        v_a, v_b = rng.sample(choices, 2)
+        for sc in scenarios:
+            facts.append(
+                _ContradictionFact(
+                    fact_id=f"{sc}-{i:03d}-{uuid.UUID(int=rng.getrandbits(128)).hex[:8]}",
+                    tenant_id=tenant_id,
+                    fleet_id=fleet_id,
+                    agent_a=f"agent_ctr_a_{i % 4}",
+                    agent_b=f"agent_ctr_b_{i % 4}",
+                    subject=subject,
+                    predicate=predicate,
+                    value_a=v_a,
+                    value_b=v_b,
+                    scenario=sc,
+                )
+            )
+    rng.shuffle(facts)
+    return facts
+
+
+# ---------------------------------------------------------------------- #
+# Per-fact execution                                                      #
+# ---------------------------------------------------------------------- #
+
+
+def _write_kwargs(
+    *,
+    fact: _ContradictionFact,
+    agent_id: str,
+    value: str,
+    subject_entity_id: str,
+    write_mode: str | None,
+) -> dict[str, Any]:
+    return {
+        "tenant_id": fact.tenant_id,
+        "fleet_id": fact.fleet_id,
+        "agent_id": agent_id,
+        # Carry both an RDF triple (the deterministic signal) AND a
+        # natural-language version (so the row is searchable later).
+        "content": f"The {fact.predicate} of {fact.subject} is {value}.",
+        "subject_entity_id": subject_entity_id,
+        "predicate": fact.predicate,
+        "object_value": value,
+        "metadata": {
+            "experiment": "contradiction",
+            "fact_id": fact.fact_id,
+            "subject": fact.subject,
+            "predicate": fact.predicate,
+            "asserted_value": value,
+            "scenario": fact.scenario,
+        },
+        "write_mode": write_mode,
+    }
+
+
+async def _do_write(
+    client: MemClawClient,
+    *,
+    agent_id: str,
+    fact: _ContradictionFact,
+    value: str,
+    subject_entity_id: str,
+    write_mode: str | None,
+    sink: JsonlSink,
+    sequence: int,
+) -> dict[str, Any]:
+    """Write a single contradictory value; record the response shape."""
+    kwargs = _write_kwargs(
+        fact=fact,
+        agent_id=agent_id,
+        value=value,
+        subject_entity_id=subject_entity_id,
+        write_mode=write_mode,
+    )
+    try:
+        resp = await client.write_memory(**kwargs)
+        payload = resp.json or {}
+        contradictions = payload.get("superseded_by") or []
+        result = {
+            "fact_id": fact.fact_id,
+            "scenario": fact.scenario,
+            "sequence": sequence,
+            "writer_agent": agent_id,
+            "value": value,
+            "memory_id": payload.get("id"),
+            "supersedes_id": payload.get("supersedes_id"),
+            "had_contradiction": bool(
+                payload.get("supersedes_id") or contradictions
+            ),
+            "n_contradictions_reported": len(contradictions),
+            "contradictions": contradictions,
+            "latency_ms": resp.latency_ms,
+            "status_code": resp.status_code,
+            "trace_id": resp.trace_id,
+        }
+        sink.write("write", result)
+        return result
+    except MemClawError as e:
+        result = {
+            "fact_id": fact.fact_id,
+            "scenario": fact.scenario,
+            "sequence": sequence,
+            "writer_agent": agent_id,
+            "value": value,
+            "memory_id": None,
+            "supersedes_id": None,
+            "had_contradiction": False,
+            "n_contradictions_reported": 0,
+            "contradictions": [],
+            "latency_ms": None,
+            "status_code": e.status_code,
+            "trace_id": e.trace_id,
+            "error": e.message,
+        }
+        sink.write("write", result)
+        return result
+
+
+async def _run_fact(
+    client: MemClawClient,
+    fact: _ContradictionFact,
+    sink: JsonlSink,
+    *,
+    sequential_delay_ms: float,
+    settle_delay_ms: float,
+    write_mode: str | None,
+    rate_gate: asyncio.Semaphore,
+) -> dict[str, Any]:
+    """Write both contradictory values, then verify resolution."""
+    async with rate_gate:
+        # Upsert the subject entity first — both contradictory writes
+        # point at this UUID via ``subject_entity_id``, which is what
+        # routes the second write into the structural-contradiction
+        # codepath instead of the embedding-similarity dedup gate.
+        try:
+            ent_resp = await client.upsert_entity(
+                tenant_id=fact.tenant_id,
+                fleet_id=fact.fleet_id,
+                entity_type="system_resource",
+                canonical_name=fact.subject,
+                attributes={"experiment": "contradiction", "fact_id": fact.fact_id},
+            )
+            entity_id = (ent_resp.json or {}).get("id") if isinstance(ent_resp.json, dict) else None
+            sink.write(
+                "entity_upsert",
+                {
+                    "fact_id": fact.fact_id,
+                    "subject": fact.subject,
+                    "entity_id": entity_id,
+                    "latency_ms": ent_resp.latency_ms,
+                    "trace_id": ent_resp.trace_id,
+                },
+            )
+        except MemClawError as e:
+            sink.write(
+                "entity_upsert",
+                {
+                    "fact_id": fact.fact_id,
+                    "subject": fact.subject,
+                    "entity_id": None,
+                    "error": e.message,
+                    "status_code": e.status_code,
+                    "trace_id": e.trace_id,
+                },
+            )
+            entity_id = None
+
+        if entity_id is None:
+            # Without an entity UUID we can't trigger the structural
+            # detector; record a placeholder resolution so the summary
+            # still has a row for this fact-run and the cause is visible.
+            row = {
+                "fact_id": fact.fact_id,
+                "scenario": fact.scenario,
+                "subject": fact.subject,
+                "predicate": fact.predicate,
+                "value_a": fact.value_a,
+                "value_b": fact.value_b,
+                "detected": False,
+                "n_active_after_writes": 0,
+                "active_values": [],
+                "stale_read": False,
+                "probe_latency_ms": None,
+                "probe_error": "entity_upsert_failed",
+                "first_write_latency_ms": None,
+                "second_write_latency_ms": None,
+            }
+            sink.write("resolution", row)
+            return row
+
+        if fact.scenario == "sequential":
+            first = await _do_write(
+                client,
+                agent_id=fact.agent_a,
+                fact=fact,
+                value=fact.value_a,
+                subject_entity_id=entity_id,
+                write_mode=write_mode,
+                sink=sink,
+                sequence=0,
+            )
+            await asyncio.sleep(sequential_delay_ms / 1000.0)
+            second = await _do_write(
+                client,
+                agent_id=fact.agent_b,
+                fact=fact,
+                value=fact.value_b,
+                subject_entity_id=entity_id,
+                write_mode=write_mode,
+                sink=sink,
+                sequence=1,
+            )
+        else:  # concurrent
+            first, second = await asyncio.gather(
+                _do_write(
+                    client,
+                    agent_id=fact.agent_a,
+                    fact=fact,
+                    value=fact.value_a,
+                    subject_entity_id=entity_id,
+                    write_mode=write_mode,
+                    sink=sink,
+                    sequence=0,
+                ),
+                _do_write(
+                    client,
+                    agent_id=fact.agent_b,
+                    fact=fact,
+                    value=fact.value_b,
+                    subject_entity_id=entity_id,
+                    write_mode=write_mode,
+                    sink=sink,
+                    sequence=1,
+                ),
+            )
+
+    # Let the server settle so the supersession indexing lands before
+    # we ask for ``active`` rows. Without this the resolution check
+    # races against the contradiction-detection pipeline and reports
+    # false positives.
+    if settle_delay_ms > 0:
+        await asyncio.sleep(settle_delay_ms / 1000.0)
+
+    # Resolution check — a fresh search filtered to ``active`` rows
+    # should return at most one row carrying the fact_id metadata.
+    try:
+        probe = await client.search_memory(
+            tenant_id=fact.tenant_id,
+            fleet_ids=[fact.fleet_id],
+            query=fact.subject,
+            top_k=10,
+            status_filter="active",
+        )
+        items = (probe.json or {}).get("items") if isinstance(probe.json, dict) else []
+        items = items or []
+        active_values = [
+            it.get("metadata", {}).get("asserted_value")
+            for it in items
+            if isinstance(it, dict)
+            and it.get("metadata", {}).get("fact_id") == fact.fact_id
+        ]
+        n_active = len(active_values)
+        stale_read = n_active > 1
+        probe_latency = probe.latency_ms
+        probe_error = None
+    except MemClawError as e:
+        active_values = []
+        n_active = 0
+        stale_read = False
+        probe_latency = None
+        probe_error = e.message
+
+    row = {
+        "fact_id": fact.fact_id,
+        "scenario": fact.scenario,
+        "subject": fact.subject,
+        "predicate": fact.predicate,
+        "entity_id": entity_id,
+        "value_a": fact.value_a,
+        "value_b": fact.value_b,
+        "first_memory_id": first.get("memory_id"),
+        "second_memory_id": second.get("memory_id"),
+        "second_supersedes_id": second.get("supersedes_id"),
+        "first_supersedes_id": first.get("supersedes_id"),
+        "detected": bool(
+            second.get("supersedes_id") or first.get("supersedes_id")
+        ),
+        "n_active_after_writes": n_active,
+        "active_values": active_values,
+        "stale_read": stale_read,
+        "probe_latency_ms": probe_latency,
+        "probe_error": probe_error,
+        "first_write_latency_ms": first.get("latency_ms"),
+        "second_write_latency_ms": second.get("latency_ms"),
+    }
+    sink.write("resolution", row)
+    return row
+
+
+# ---------------------------------------------------------------------- #
+# Runner                                                                  #
+# ---------------------------------------------------------------------- #
+
+
+async def run(
+    cfg: HarnessConfig,
+    *,
+    client: MemClawClient | None = None,
+) -> dict[str, Any]:
+    """Execute the contradiction experiment end-to-end."""
+    run_id, run_dir, events_path = make_run_dir(cfg, "contradiction")
+    facts = _build_facts(cfg, nonce=run_id)
+
+    exp = cfg.experiment or {}
+    sequential_delay_ms: float = float(exp.get("sequential_delay_ms", 250.0))
+    settle_delay_ms: float = float(exp.get("settle_delay_ms", 0.0))
+    write_mode: str | None = exp.get("write_mode", "strong")
+    rate_gate = asyncio.Semaphore(int(exp.get("max_in_flight", 4)))
+
+    logger.info(
+        "contradiction run %s — facts=%d sequential_delay=%.0fms write_mode=%s",
+        run_id,
+        len(facts),
+        sequential_delay_ms,
+        write_mode,
+    )
+
+    async def _execute(c: MemClawClient) -> None:
+        with open_sink_with_envelope(
+            events_path,
+            run_id=run_id,
+            experiment="contradiction",
+            cfg=cfg,
+            extra={
+                "n_facts": len(facts),
+                "sequential_delay_ms": sequential_delay_ms,
+                "settle_delay_ms": settle_delay_ms,
+                "write_mode": write_mode,
+            },
+        ) as sink:
+            await asyncio.gather(
+                *(
+                    _run_fact(
+                        c,
+                        f,
+                        sink,
+                        sequential_delay_ms=sequential_delay_ms,
+                        settle_delay_ms=settle_delay_ms,
+                        write_mode=write_mode,
+                        rate_gate=rate_gate,
+                    )
+                    for f in facts
+                )
+            )
+            sink.write("run_end", {"run_id": run_id})
+
+    await run_with_client(cfg, client=client, body=_execute)
+    return _materialize_outputs(run_dir, events_path)
+
+
+# ---------------------------------------------------------------------- #
+# Output materialization                                                  #
+# ---------------------------------------------------------------------- #
+
+
+def _materialize_outputs(run_dir: Path, events_path: Path) -> dict[str, Any]:
+    events = read_jsonl(events_path)
+    resolutions = events_to_frame(events, "resolution")
+    writes = events_to_frame(events, "write")
+
+    contradictions_csv = run_dir / "contradictions.csv"
+    summary_csv = run_dir / "summary.csv"
+    detection_plot = run_dir / "detection_rate.png"
+    latency_plot = run_dir / "write_latency.png"
+
+    if not resolutions.empty:
+        write_csv(resolutions, contradictions_csv)
+        # Per-scenario detection rate as a bar chart.
+        grouped = (
+            resolutions.groupby("scenario")
+            .agg(
+                n=("detected", "size"),
+                detected=("detected", "sum"),
+                stale=("stale_read", "sum"),
+            )
+            .reset_index()
+        )
+        grouped["detection_rate"] = grouped["detected"] / grouped["n"].clip(lower=1)
+        grouped["stale_read_rate"] = grouped["stale"] / grouped["n"].clip(lower=1)
+        bar_chart_from_frame(
+            grouped,
+            x="scenario",
+            y="detection_rate",
+            label_fmt=lambda r: f"{int(r['detected'])}/{int(r['n'])}",
+            title="Contradiction detection rate",
+            ylabel="Detection rate",
+            out_path=detection_plot,
+        )
+
+    if not writes.empty:
+        plot_latency_hist(
+            writes,
+            col="latency_ms",
+            out_path=latency_plot,
+            title="Write latency (contradiction experiment)",
+        )
+
+    n_resolutions = int(len(resolutions))
+    n_detected = int(resolutions["detected"].sum()) if "detected" in resolutions else 0
+    n_stale = int(resolutions["stale_read"].sum()) if "stale_read" in resolutions else 0
+    detection_rate = n_detected / n_resolutions if n_resolutions else 0.0
+    stale_read_rate = n_stale / n_resolutions if n_resolutions else 0.0
+
+    summary_rows: list[dict[str, Any]] = [
+        {"metric": "n_facts_runs", "value": n_resolutions},
+        {"metric": "n_detected", "value": n_detected},
+        {"metric": "detection_rate", "value": detection_rate},
+        {"metric": "n_stale_reads", "value": n_stale},
+        {"metric": "stale_read_rate", "value": stale_read_rate},
+        {"metric": "n_writes", "value": int(len(writes))},
+    ]
+    if not writes.empty:
+        for k, v in summarize_latency(writes, "latency_ms").items():
+            summary_rows.append({"metric": f"write_latency_{k}", "value": v})
+        if "had_contradiction" in writes.columns:
+            had = writes[writes["had_contradiction"] == True]  # noqa: E712
+            no = writes[writes["had_contradiction"] == False]  # noqa: E712
+            for label, frame in (("with_contradiction", had), ("no_contradiction", no)):
+                for k, v in summarize_latency(frame, "latency_ms").items():
+                    summary_rows.append({"metric": f"write_latency_{label}_{k}", "value": v})
+
+    write_csv(pd.DataFrame(summary_rows), summary_csv)
+
+    return {
+        "run_dir": str(run_dir),
+        "events": str(events_path),
+        "contradictions_csv": str(contradictions_csv),
+        "summary_csv": str(summary_csv),
+        "detection_plot": str(detection_plot),
+        "latency_plot": str(latency_plot),
+        "n_facts_runs": n_resolutions,
+        "n_detected": n_detected,
+        "detection_rate": detection_rate,
+        "n_stale_reads": n_stale,
+        "stale_read_rate": stale_read_rate,
+    }

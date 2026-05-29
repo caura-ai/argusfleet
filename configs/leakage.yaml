@@ -1,0 +1,25 @@
+# Default leakage experiment config. Override with `--config <path>` or env.
+# Env vars MEMCLAW_BASE_URL and MEMCLAW_API_KEY take precedence over base_url.
+
+base_url: https://memclaw.net
+request_timeout_s: 120
+max_retries: 3
+seed: 42
+run_label: leakage
+
+experiment:
+  # Dimensions chosen so n_probes ≈ 100 in single-tenant mode:
+  #   agents = n_tenants × n_fleets × n_agents = 1 × 4 × 3 = 12
+  #   secrets = owners × 2_scopes = 4 × 2 = 8
+  #   probes  = agents × secrets = 96
+  n_tenants: 2
+  n_fleets_per_tenant: 4
+  n_agents_per_fleet: 3
+  # Pause between writing every secret and firing probes. memclaw.net
+  # enriches/embeds asynchronously by default — probing too soon means
+  # the canary isn't indexed yet and every probe returns empty. Bump up
+  # if probes are still missing canaries on a compliant server.
+  settle_delay_ms: 8000
+  # Concurrency cap on probe execution. The per-tenant /search rate limit
+  # is 100 req/min; max_in_flight=10 keeps comfortably under the ceiling.
+  max_in_flight: 10
