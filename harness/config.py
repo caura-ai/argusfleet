@@ -34,9 +34,11 @@ class HarnessConfig(BaseModel):
     api_key: str | None = None
     request_timeout_s: float = 30.0
     max_retries: int = 3
-    # Hard floor on the gap between writes (per memory of /search rate limit
-    # of 100 req/min/tenant; same order of magnitude on write).
-    min_request_interval_ms: float = 50.0
+    # Minimum gap between writes, enforced client-side by the write rate
+    # limiter. MemClaw caps writes at 10/second/tenant (429); 125 ms → 8/s
+    # keeps the harness safely under that ceiling so bursts from
+    # ``max_in_flight`` > 1 don't abort provenance chains mid-write.
+    min_request_interval_ms: float = 125.0
     seed: int = 42
     output_dir: Path = Field(default_factory=_default_output_dir)
     run_label: str | None = None

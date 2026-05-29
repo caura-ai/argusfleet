@@ -11,6 +11,7 @@ the client minimal makes it easy to swap transports later.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 import uuid
@@ -63,6 +64,37 @@ class MemClawResponse:
 _RETRYABLE_EXC = (httpx.TransportError, httpx.ReadTimeout, httpx.ConnectTimeout)
 
 
+class _WriteRateLimiter:
+    """Spaces write requests under MemClaw's per-tenant write ceiling.
+
+    MemClaw rejects writes above ~10/second/tenant with HTTP 429
+    ("Rate limit exceeded: 10 per 1 second"). With concurrent experiment
+    tasks (``max_in_flight`` > 1) a naive burst trips that ceiling and
+    aborts whole provenance chains. This limiter is shared across every
+    coroutine using one client: each acquirer is handed the next time
+    slot ``min_interval`` after the previous one, so the aggregate write
+    rate stays at ``1 / min_interval`` regardless of concurrency. The
+    lock is held only to assign a slot (cheap); the wait happens after
+    release so slot assignment never serialises the actual HTTP.
+    """
+
+    def __init__(self, min_interval_s: float) -> None:
+        self._min_interval = max(0.0, min_interval_s)
+        self._lock = asyncio.Lock()
+        self._next_slot = 0.0
+
+    async def acquire(self) -> None:
+        if self._min_interval <= 0:
+            return
+        async with self._lock:
+            now = time.monotonic()
+            slot = max(now, self._next_slot)
+            self._next_slot = slot + self._min_interval
+            wait = slot - now
+        if wait > 0:
+            await asyncio.sleep(wait)
+
+
 class MemClawClient:
     """Async client for memclaw.net REST API (``/api/v1/...``).
 
@@ -85,11 +117,15 @@ class MemClawClient:
         *,
         timeout_s: float = 30.0,
         max_retries: int = 3,
+        min_write_interval_ms: float = 125.0,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/") + "/api/v1"
         self._api_key = api_key
         self._max_retries = max(1, max_retries)
+        # Throttle mutating calls under the server's 10-writes/s/tenant
+        # ceiling. 125 ms → 8/s, comfortably below 429 territory.
+        self._write_limiter = _WriteRateLimiter(min_write_interval_ms / 1000.0)
         self._owns_client = http_client is None
         self._client = http_client or httpx.AsyncClient(
             timeout=httpx.Timeout(timeout_s),
@@ -160,6 +196,7 @@ class MemClawClient:
         if idempotency_key:
             headers["Idempotency-Key"] = idempotency_key
 
+        await self._write_limiter.acquire()
         return await self._request("POST", "/memories", json=body, extra_headers=headers)
 
     async def search_memory(
@@ -258,6 +295,7 @@ class MemClawClient:
             body["fleet_id"] = fleet_id
         if attributes is not None:
             body["attributes"] = attributes
+        await self._write_limiter.acquire()
         return await self._request("POST", "/entities/upsert", json=body)
 
     async def delete_all_memories(

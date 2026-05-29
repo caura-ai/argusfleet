@@ -222,6 +222,57 @@ async def test_count_memories_hits_stats_endpoint() -> None:
 
 
 @pytest.mark.asyncio
+async def test_write_rate_limiter_spaces_concurrent_writes() -> None:
+    """The shared write limiter must hold the aggregate write rate under
+    the server's 10/s ceiling even when many writes are dispatched
+    concurrently. With a 50 ms interval, 5 writes fired at once should
+    take at least 4 intervals (200 ms) of wall-clock to clear."""
+    import asyncio
+    import time as _time
+
+    async with MemClawClient(
+        "https://memclaw.test", api_key="k", max_retries=1, min_write_interval_ms=50.0
+    ) as client:
+        with respx.mock(base_url="https://memclaw.test") as router:
+            router.post("/api/v1/memories").mock(
+                return_value=httpx.Response(201, json={"id": "1"})
+            )
+            started = _time.monotonic()
+            await asyncio.gather(
+                *(
+                    client.write_memory(tenant_id="mc_t1", agent_id="a", content=f"c{i}")
+                    for i in range(5)
+                )
+            )
+            elapsed = _time.monotonic() - started
+    assert elapsed >= 0.20, f"writes not throttled (elapsed={elapsed:.3f}s)"
+
+
+@pytest.mark.asyncio
+async def test_write_rate_limiter_disabled_when_interval_zero() -> None:
+    """An interval of 0 disables throttling — writes fire immediately."""
+    import asyncio
+    import time as _time
+
+    async with MemClawClient(
+        "https://memclaw.test", api_key="k", max_retries=1, min_write_interval_ms=0.0
+    ) as client:
+        with respx.mock(base_url="https://memclaw.test") as router:
+            router.post("/api/v1/memories").mock(
+                return_value=httpx.Response(201, json={"id": "1"})
+            )
+            started = _time.monotonic()
+            await asyncio.gather(
+                *(
+                    client.write_memory(tenant_id="mc_t1", agent_id="a", content=f"c{i}")
+                    for i in range(5)
+                )
+            )
+            elapsed = _time.monotonic() - started
+    assert elapsed < 0.20, f"unexpected throttling with interval=0 (elapsed={elapsed:.3f}s)"
+
+
+@pytest.mark.asyncio
 async def test_4xx_does_not_retry() -> None:
     async with MemClawClient(
         "https://memclaw.test", api_key="k", max_retries=3

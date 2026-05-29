@@ -67,6 +67,7 @@ async def run_with_client(
         cfg.api_key,
         timeout_s=cfg.request_timeout_s,
         max_retries=cfg.max_retries,
+        min_write_interval_ms=cfg.min_request_interval_ms,
     ) as c:
         await body(c)
 
