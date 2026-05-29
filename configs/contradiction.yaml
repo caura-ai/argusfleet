@@ -16,9 +16,11 @@ experiment:
   # enough for the first write's enrichment pipeline to complete on the
   # server, otherwise the second write may race against an unindexed row.
   sequential_delay_ms: 500
-  # Pause after both writes before the resolution-check search. Without
-  # this, search may not yet see the post-supersession ``active`` row.
-  settle_delay_ms: 6000
+  # Pause after both writes before the post-commit re-fetch + resolution
+  # check. Contradiction detection runs async/post-commit (~6 s observed
+  # for a single write); 20 s gives margin under concurrent load so the
+  # GET-by-id re-fetch sees the supersession the detector establishes.
+  settle_delay_ms: 20000
   # "strong" forces full pipeline (incl. contradiction detection). "fast"
   # skips enrichment and is useful only as an ablation.
   write_mode: strong

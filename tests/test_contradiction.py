@@ -40,6 +40,9 @@ def _fake_server() -> respx.Router:
     # Map (entity_id, predicate) -> latest memory_id; the second write
     # against the same key gets supersedes_id pointing back.
     latest_by_key: dict[tuple[str, str], str] = {}
+    # Stored rows by id, so the experiment's post-commit GET-by-id
+    # re-fetch (detection is async) can read back supersedes_id / status.
+    rows_by_id: dict[str, dict] = {}
 
     def upsert_handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.read())
@@ -93,7 +96,21 @@ def _fake_server() -> respx.Router:
                 else None
             ),
         }
+        # Persist for GET-by-id re-fetch. Detection is async/post-commit:
+        # supersedes_id is NOT in the synchronous response a real server
+        # returns, so the second write flips the prior row to ``outdated``
+        # and the harness reads the supersession back via GET.
+        rows_by_id[new_id] = dict(payload)
+        if prev and prev in rows_by_id:
+            rows_by_id[prev]["status"] = "outdated"
         return httpx.Response(201, json=payload)
+
+    def get_handler(request: httpx.Request) -> httpx.Response:
+        mem_id = request.url.path.rsplit("/", 1)[-1]
+        row = rows_by_id.get(mem_id)
+        if row is None:
+            return httpx.Response(404, json={"detail": "Memory not found"})
+        return httpx.Response(200, json=row)
 
     def search_handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.read())
@@ -128,6 +145,7 @@ def _fake_server() -> respx.Router:
     router.post("/api/v1/entities/upsert").mock(side_effect=upsert_handler)
     router.post("/api/v1/memories").mock(side_effect=write_handler)
     router.post("/api/v1/search").mock(side_effect=search_handler)
+    router.get(url__regex=r".*/api/v1/memories/[0-9a-fA-F-]+(\?.*)?$").mock(side_effect=get_handler)
     return router
 
 
@@ -220,6 +238,24 @@ async def test_contradiction_no_detection_when_server_drops_supersedes(
         )
         router.post("/api/v1/search").mock(
             return_value=httpx.Response(200, json={"items": []})
+        )
+        # GET-by-id re-fetch (the detection signal) also shows no
+        # supersession and an active status — so detection stays 0.
+        router.get(url__regex=r".*/api/v1/memories/[0-9a-fA-F-]+(\?.*)?$").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "00000000-0000-0000-0000-000000000001",
+                    "tenant_id": "mc_t_test",
+                    "agent_id": "agent_ctr_a_0",
+                    "memory_type": "fact",
+                    "content": "stub",
+                    "metadata": {},
+                    "status": "active",
+                    "supersedes_id": None,
+                    "superseded_by": None,
+                },
+            )
         )
         async with MemClawClient(cfg.base_url, api_key="k", max_retries=1) as client:
             result = await contradiction.run(cfg, client=client)
