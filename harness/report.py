@@ -166,7 +166,7 @@ def render_markdown(latest: dict[str, _RunInfo]) -> str:
         lines.append("No runs found. Execute an experiment first, e.g.")
         lines.append("")
         lines.append("```bash")
-        lines.append("uv run python -m agentfleetmem run leakage")
+        lines.append("python -m agentfleetmem run leakage")
         lines.append("```")
         return "\n".join(lines)
 

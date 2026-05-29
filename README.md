@@ -48,29 +48,36 @@ agentfleetmem/
 
 ## Install
 
-Requires Python **3.12+** and [`uv`](https://github.com/astral-sh/uv).
+Requires Python **3.12+**.
 
 ```bash
 cd agentfleetmem
-uv sync --extra dev
+python -m venv .venv
+# Windows:
+.venv\Scripts\activate
+# macOS / Linux:
+source .venv/bin/activate
+
+pip install -r requirements.txt
+pip install -e .
+
 cp .env.example .env
-# edit .env and set MEMCLAW_API_KEY
+# edit .env and set MEMCLAW_API_KEY (and optionally MEMCLAW_TENANT_ID)
 ```
 
-`uv sync` creates `.venv/` and installs the project plus the `dev` extra
-(pytest, respx, ruff). Use `--extra extra` to also pull in optional
-dependencies (networkx, rich, structlog).
+`requirements.txt` ships pinned versions for reproducibility. `pip install -e .`
+installs the `agentfleetmem` package itself so `python -m agentfleetmem` works.
 
 ## Run the leakage experiment
 
 ```bash
-uv run python -m agentfleetmem run leakage
+python -m agentfleetmem run leakage
 ```
 
 With overrides:
 
 ```bash
-uv run python -m agentfleetmem run leakage --seed 1337 --label baseline -v
+python -m agentfleetmem run leakage --seed 1337 --label baseline -v
 ```
 
 Outputs land under `outputs/runs/<UTC-timestamp>-<label>-seed<N>/`:
@@ -140,7 +147,7 @@ carries auth. `top_k` is clamped to 20 (the public REST cap) client-side.
 ## Run the contradiction experiment
 
 ```bash
-uv run python -m agentfleetmem run contradiction
+python -m agentfleetmem run contradiction
 ```
 
 Generates ``sequential`` and ``concurrent`` writes for the same fact
@@ -171,7 +178,7 @@ underlying governance behaviour.
 ## Run the provenance experiment
 
 ```bash
-uv run python -m agentfleetmem run provenance
+python -m agentfleetmem run provenance
 ```
 
 Builds N derivation chains of depth K — agent_0 writes a root fact,
@@ -201,7 +208,7 @@ Outputs:
 ## Run the propagation experiment
 
 ```bash
-uv run python -m agentfleetmem run propagation
+python -m agentfleetmem run propagation
 ```
 
 Agent_writer writes ``n_facts`` fleet-scoped canaries in fleet F1. Every
@@ -227,7 +234,7 @@ Outputs:
 ```bash
 # Runs leakage, contradiction, provenance, propagation in sequence
 # using each experiment's default config.
-uv run python -m agentfleetmem run all
+python -m agentfleetmem run all
 ```
 
 Useful flags:
@@ -245,7 +252,7 @@ back to each run dir for raw artifacts.
 ## View consolidated results
 
 ```bash
-uv run python -m agentfleetmem report latest
+python -m agentfleetmem report latest
 ```
 
 Scans `outputs/runs/`, picks the **most recent run per experiment**,
@@ -266,7 +273,7 @@ plot files. Stubbed experiments show up as `_No run yet._`.
 ## Re-plot from a prior run
 
 ```bash
-uv run python -m agentfleetmem plot latest
+python -m agentfleetmem plot latest
 ```
 
 This re-reads `events.jsonl` from the most recent run directory and
@@ -276,7 +283,7 @@ code without re-hitting the server.
 ## Tests
 
 ```bash
-uv run pytest -q
+pytest -q
 ```
 
 Fixtures live at the repo root in `tests/conftest.py`. The transport
