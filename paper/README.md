@@ -134,5 +134,5 @@ add a `\ref{}` where you mention it.
   copy (see §10 Limitations).
 - The `\author{Anonymous Authors}` block needs to be updated for the
   final submission.
-- `MemClaw` and `AgentFleetMem` citation entries are placeholder URLs;
+- `MemClaw` and `ArgusFleet` citation entries are placeholder URLs;
   replace with the actual artifact links once finalised.

@@ -58,7 +58,7 @@ Governed Shared Memory for Multi-Agent LLM Systems
   \begin{abstract}
   Most AI memory systems are designed for isolated chatbot interactions in which a single agent retrieves information from one conversational history. Production AI deployments increasingly operate as fleets of cooperating agents sharing persistent memory across workflows, users, and tasks. In these environments, memory is no longer merely a retrieval problem: it becomes a distributed systems problem involving governance, synchronization, temporal correctness, provenance, and access control.
 
-  We introduce a systems architecture for governed shared memory in multi-agent LLM environments. We formalize the fleet-memory problem, identify four classes of fleet-memory failure modes, and propose architectural primitives for scoped retrieval, temporal contradiction resolution, provenance tracking, and policy-governed memory propagation. We present MemClaw, a reference implementation deployed in production at \texttt{memclaw.net}, and AgentFleetMem, a reproducible evaluation harness that exercises each primitive against the live service.
+  We introduce a systems architecture for governed shared memory in multi-agent LLM environments. We formalize the fleet-memory problem, identify four classes of fleet-memory failure modes, and propose architectural primitives for scoped retrieval, temporal contradiction resolution, provenance tracking, and policy-governed memory propagation. We present MemClaw, a reference implementation deployed in production at \texttt{memclaw.net}, and ArgusFleet, a reproducible evaluation harness that exercises each primitive against the live service.
 
   Across 100 planned workload trials per primitive on a freshly-provisioned tenant, we observe sub-second provenance chain traversal (p50 \(\approx 290\) ms, p95 \(\approx 333\) ms at depth four), perfect intra-fleet propagation (\(60/60\)) with zero cross-fleet leakage (\(0/40\)) and an eventually-consistent visibility window of approximately \(83\) seconds (p50). We also surface three architectural findings about production memory infrastructure: scope enforcement is bimodal --- tenant-level isolation is enforced uniformly while sub-tenant scope is enforced only on the search path, not on direct \(\mathtt{GET}\)-by-id; embedding-similarity deduplication pre-empts contradiction detection even on a clean tenant where no historical near-duplicates exist; and cross-agent memory re-homing is gated behind elevated trust levels in a way that conflates fleet-internal propagation with administrative migration. Our results suggest that long-context retrieval alone is insufficient for production fleet-memory systems and that governed shared memory requires explicit systems-level abstractions beyond existing single-agent memory architectures.
   \end{abstract}
@@ -75,9 +75,9 @@ Governed Shared Memory for Multi-Agent LLM Systems
 and reads governed memory through MemClaw's REST API. MemClaw enforces
 four governance dimensions --- scope, time, provenance, and propagation
 --- that jointly characterise operational correctness in fleet-memory
-systems. The Argus evaluation harness (bottom) probes the same REST API
+systems. The ArgusFleet evaluation harness (bottom) probes the same REST API
 surface with one experiment per dimension. The horizontal alignment
-between governance dimensions and Argus experiments reflects a 1:1
+between governance dimensions and ArgusFleet experiments reflects a 1:1
 mapping: each experiment measures the dimension directly above it.}
 \label{fig:overview}
 \end{figure*}
@@ -88,7 +88,7 @@ When multiple agents interact through shared memory, new correctness and governa
 
 Current AI memory systems largely optimise for properties inherited from the single-agent world: retrieval relevance, conversational recall, long-context compression, and semantic similarity. Production multi-agent deployments require an additional layer on top: scoped visibility, policy enforcement, temporal correctness, synchronization semantics, and provenance guarantees. We argue that AI memory is therefore evolving from a context-window problem into a governed distributed-memory problem, and that this transition warrants the same systems-level attention historically devoted to databases, event-sourcing, and synchronization infrastructure.
 
-This paper introduces a systems architecture for governed shared memory under that framing and presents MemClaw as a reference implementation deployed at fleet scale. We also introduce AgentFleetMem, an evaluation harness that lets the resulting primitives be measured empirically against a live production service.
+This paper introduces a systems architecture for governed shared memory under that framing and presents MemClaw as a reference implementation deployed at fleet scale. We also introduce ArgusFleet, an evaluation harness that lets the resulting primitives be measured empirically against a live production service.
 
 \subsection{Contributions}
 
@@ -98,8 +98,8 @@ This paper makes six contributions:
     \item We define a taxonomy of four fleet-memory failure modes: unauthorized leakage, stale propagation, contradiction persistence, and provenance collapse.
     \item We propose architectural primitives for governed shared memory: scoped retrieval, temporal contradiction resolution, provenance tracking, and policy-governed memory propagation.
     \item We present MemClaw, a reference implementation of these primitives deployed in production at \texttt{memclaw.net}.
-    \item We introduce AgentFleetMem, a reproducible, async, JSONL-traced evaluation harness that exercises the four governance failure modes of \S\ref{sec:failures} as four experiments against a live memory service. The harness reports five metric axes: four governance properties (one per failure mode) plus \emph{retrieval recall} as an orthogonal availability signal that shares its probe set with the leakage experiment.
-    \item We report empirical results from running AgentFleetMem against MemClaw at \(N=100\) trials per experiment and surface three architectural findings: scope enforcement is bimodal between the access (\(\mathtt{GET}\)-by-id) and discovery (search) paths; embedding-similarity deduplication pre-empts contradiction detection on the write path; and cross-agent memory re-homing is gated behind elevated trust levels.
+    \item We introduce ArgusFleet, a reproducible, async, JSONL-traced evaluation harness that exercises the four governance failure modes of \S\ref{sec:failures} as four experiments against a live memory service. The harness reports five metric axes: four governance properties (one per failure mode) plus \emph{retrieval recall} as an orthogonal availability signal that shares its probe set with the leakage experiment.
+    \item We report empirical results from running ArgusFleet against MemClaw at \(N=100\) trials per experiment and surface three architectural findings: scope enforcement is bimodal between the access (\(\mathtt{GET}\)-by-id) and discovery (search) paths; embedding-similarity deduplication pre-empts contradiction detection on the write path; and cross-agent memory re-homing is gated behind elevated trust levels.
 \end{enumerate}
 
 \section{Background and Related Work}
@@ -321,7 +321,7 @@ This differs from traditional vector retrieval systems in which semantic similar
 \section{Reference Implementation}
 \label{sec:impl}
 
-We instantiate the architecture of \S5 in two artifacts: MemClaw, a multi-tenant memory service deployed at \texttt{memclaw.net}, and AgentFleetMem, an open evaluation harness that exercises the architectural primitives against MemClaw or any wire-compatible implementation.
+We instantiate the architecture of \S5 in two artifacts: MemClaw, a multi-tenant memory service deployed at \texttt{memclaw.net}, and ArgusFleet, an open evaluation harness that exercises the architectural primitives against MemClaw or any wire-compatible implementation.
 
 \subsection{MemClaw}
 
@@ -336,9 +336,9 @@ The following operations are exercised in this paper:
     \item \texttt{POST /api/v1/memories/redistribute} --- re-home a memory onto a different agent; requires the caller to hold \(\text{trust\_level} \ge 3\).
 \end{itemize}
 
-\subsection{AgentFleetMem}
+\subsection{ArgusFleet}
 
-AgentFleetMem~\citep{agentfleetmem} is a Python 3.12 evaluation harness comprising four experiments, an async REST client, a typed domain model, structured event logging, and a reproducible reporting pipeline. The harness produces JSONL event traces, CSV summaries, and Matplotlib figures from each run, all derived from the same canonical event stream so analysis can be re-executed without re-hitting the server.
+ArgusFleet~\citep{argusfleet} is a Python 3.12 evaluation harness comprising four experiments, an async REST client, a typed domain model, structured event logging, and a reproducible reporting pipeline. It is open-source as the \texttt{agentfleetmem} package at \url{https://github.com/caura-ai/agentfleetmem}; we use the name ArgusFleet for the system throughout this paper. The harness produces JSONL event traces, CSV summaries, and Matplotlib figures from each run, all derived from the same canonical event stream so analysis can be re-executed without re-hitting the server.
 
 \paragraph{Determinism.}
 Every workload is seeded. Plan structure (fleets, agents, fact subjects, chain shapes) is reproducible across runs sharing the same seed. Per-run content is salted with a run-unique nonce so that re-running against a stateful production service still produces semantically fresh writes rather than collisions on accumulated state. Each run materialises a uniquely-named output directory of the form \texttt{<UTC-timestamp>-<experiment>-seed<N>/}.
@@ -522,7 +522,7 @@ This latency is dominated by asynchronous server-side enrichment (embedding gene
 
 The contradiction experiment produced a null result that the clean-tenant run makes essentially indisputable: \textsc{detection\_rate} \(= 0/100\) and \textsc{stale\_read\_rate} \(= 0/100\). Of \(200\) planned writes (\(100\) fact-runs \(\times\) two writes each), only \(74\) landed; the remaining \(126\) were rejected with HTTP \(409\) \texttt{near-duplicate}.
 
-Crucially, the tenant was freshly provisioned --- no prior AgentFleetMem state, no historical writes to dedup against. The dedup gate is therefore firing on \emph{intra-run} similarity: the second write of each contradictory pair (e.g., \(\langle \text{service-7}, \text{deployment\_region}, \text{us-west-2} \rangle\) followed by \(\langle \text{service-7}, \text{deployment\_region}, \text{eu-central-1} \rangle\)) is rejected as a near-duplicate of \emph{the first write of the same pair}. On a polluted tenant this could be confounded with cross-run accumulated state; here it cannot. The pipeline ordering --- embedding-similarity gate before structural-contradiction detector --- is the architectural cause, discussed in \S\ref{sec:findings}.
+Crucially, the tenant was freshly provisioned --- no prior ArgusFleet state, no historical writes to dedup against. The dedup gate is therefore firing on \emph{intra-run} similarity: the second write of each contradictory pair (e.g., \(\langle \text{service-7}, \text{deployment\_region}, \text{us-west-2} \rangle\) followed by \(\langle \text{service-7}, \text{deployment\_region}, \text{eu-central-1} \rangle\)) is rejected as a near-duplicate of \emph{the first write of the same pair}. On a polluted tenant this could be confounded with cross-run accumulated state; here it cannot. The pipeline ordering --- embedding-similarity gate before structural-contradiction detector --- is the architectural cause, discussed in \S\ref{sec:findings}.
 
 Switching the write payload to carry an explicit RDF triple --- a shared \texttt{subject\_entity\_id} and \texttt{predicate} with differing \texttt{object\_value} --- was insufficient to bypass the embedding pre-filter. The \textsc{stale\_read\_rate} of \(0\) confirms a complementary observation: on the rare path where both contradictory writes did land, the server's downstream read filter prevented multiple conflicting rows from being simultaneously active. So the read side enforces eventual consistency correctly; only the write-side pipeline blocks the structural detector.
 
@@ -584,7 +584,7 @@ We do not compare against a baseline (e.g., a long-context-only configuration, o
 
 \section{Conclusion}
 
-We introduced a systems architecture for governed shared memory in multi-agent LLM environments, instantiated it in MemClaw, and evaluated the resulting primitives using AgentFleetMem, a reproducible harness that exercises the four governance failure modes of \S\ref{sec:failures} as four experiments against a live memory service, reporting five metric axes: governance correctness, contradiction handling, provenance reconstruction, and cross-agent visibility --- one per failure mode --- plus \emph{retrieval recall} as an orthogonal availability control sharing its probe set with the leakage experiment.
+We introduced a systems architecture for governed shared memory in multi-agent LLM environments, instantiated it in MemClaw, and evaluated the resulting primitives using ArgusFleet, a reproducible harness that exercises the four governance failure modes of \S\ref{sec:failures} as four experiments against a live memory service, reporting five metric axes: governance correctness, contradiction handling, provenance reconstruction, and cross-agent visibility --- one per failure mode --- plus \emph{retrieval recall} as an orthogonal availability control sharing its probe set with the leakage experiment.
 
 The empirical study shows that provenance chain traversal is feasible at sub-second per-hop latency (p50 \(\approx 290\) ms at depth four), that cross-fleet propagation in the propagation experiment is correct on \(60/60\) intra-fleet probes with zero leaks across \(40\) foreign-fleet probes, and that the eventual-consistency window between write completion and search visibility is on the order of \(83\) s at p50 (\(130\) s at p95). It also surfaces three architectural observations: scope enforcement is bimodal --- tenant-level isolation is enforced on every path, while sub-tenant scope is enforced partially on the search path and not at all on direct \(\mathtt{GET}\)-by-id; semantic deduplication on the write path pre-empts contradiction detection even on a clean tenant where no historical near-duplicates exist; and cross-agent memory re-homing is privilege-gated in a way that conflates fleet-internal propagation with administrative migration.
 
