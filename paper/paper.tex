@@ -119,7 +119,7 @@ This paper makes six contributions:
     \item We define a taxonomy of four fleet-memory failure modes: unauthorized leakage, stale propagation, contradiction persistence, and provenance collapse.
     \item We propose architectural primitives for governed shared memory: scoped retrieval, temporal contradiction resolution, provenance tracking, and policy-governed memory propagation.
     \item We present MemClaw, a reference implementation of these primitives deployed in production at \texttt{memclaw.net}.
-    \item We introduce AgentFleetMem, a reproducible, async, JSONL-traced evaluation harness that measures governance correctness, retrieval recall, contradiction handling, provenance reconstruction, and cross-agent visibility against a live memory service.
+    \item We introduce AgentFleetMem, a reproducible, async, JSONL-traced evaluation harness that exercises the four governance failure modes of \S\ref{sec:failures} as four experiments against a live memory service. The harness reports five metric axes: four governance properties (one per failure mode) plus \emph{retrieval recall} as an orthogonal availability signal that shares its probe set with the leakage experiment.
     \item We report empirical results from running AgentFleetMem against MemClaw at \(N=100\) trials per experiment and surface three architectural findings: scope enforcement is bimodal between the access (\(\mathtt{GET}\)-by-id) and discovery (search) paths; embedding-similarity deduplication pre-empts contradiction detection on the write path; and cross-agent memory re-homing is gated behind elevated trust levels.
 \end{enumerate}
 
@@ -359,6 +359,7 @@ In fleet-memory systems, retrieval correctness additionally depends on:
 This distinction becomes critical once memory evolves from passive context into shared operational infrastructure.
 
 \section{Fleet-Memory Failure Modes}
+\label{sec:failures}
 
 We identify four primary fleet-memory failure classes.
 
@@ -769,7 +770,7 @@ We do not compare against a baseline (e.g., a long-context-only configuration, o
 
 \section{Conclusion}
 
-We introduced a systems architecture for governed shared memory in multi-agent LLM environments, instantiated it in MemClaw, and evaluated the resulting primitives using AgentFleetMem, a reproducible harness that exercises governance correctness, retrieval recall, contradiction handling, provenance reconstruction, and cross-agent visibility against a live memory service.
+We introduced a systems architecture for governed shared memory in multi-agent LLM environments, instantiated it in MemClaw, and evaluated the resulting primitives using AgentFleetMem, a reproducible harness that exercises the four governance failure modes of \S\ref{sec:failures} as four experiments against a live memory service, reporting five metric axes: governance correctness, contradiction handling, provenance reconstruction, and cross-agent visibility --- one per failure mode --- plus \emph{retrieval recall} as an orthogonal availability control sharing its probe set with the leakage experiment.
 
 The empirical study shows that provenance chain traversal is feasible at sub-second per-hop latency (p50 \(\approx 290\) ms at depth four), that cross-fleet propagation in the propagation experiment is correct on \(60/60\) intra-fleet probes with zero leaks across \(40\) foreign-fleet probes, and that the eventual-consistency window between write completion and search visibility is on the order of \(83\) s at p50 (\(130\) s at p95). It also surfaces three architectural observations: scope enforcement is bimodal --- tenant-level isolation is enforced on every path, while sub-tenant scope is enforced partially on the search path and not at all on direct \(\mathtt{GET}\)-by-id; semantic deduplication on the write path pre-empts contradiction detection even on a clean tenant where no historical near-duplicates exist; and cross-agent memory re-homing is privilege-gated in a way that conflates fleet-internal propagation with administrative migration.
 
