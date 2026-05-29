@@ -16,8 +16,6 @@
 \usepackage[margin=0.75in,columnsep=0.28in]{geometry}
 \usepackage{booktabs}
 \usepackage{graphicx}
-\usepackage{tikz}
-\usetikzlibrary{positioning, arrows.meta, fit, backgrounds}
 % Explicit ``figures/`` paths are used on every \includegraphics so the
 % paper builds whether or not \graphicspath is honoured by the host
 % (Overleaf preserves subdirectories; some upload flows flatten them).
@@ -69,64 +67,9 @@ Governed Shared Memory for Multi-Agent LLM Systems
 
 \section{Introduction}
 
-% PLACEHOLDER overview figure. The diagram is functional --- it renders
-% the three rows (agents / governance dimensions / experiments) and the
-% 1:1 vertical alignment described in the caption --- but should be
-% replaced with a higher-fidelity vector graphic before camera-ready.
 \begin{figure*}[t!]
 \centering
-\begin{tikzpicture}[
-  font=\small,
-  node distance=0.55cm,
-  agent/.style={draw, rounded corners=2pt, minimum width=1.7cm,
-                minimum height=0.65cm, align=center, fill=blue!6},
-  dim/.style={draw, rounded corners=2pt, minimum width=1.7cm,
-              minimum height=0.65cm, align=center, fill=orange!12,
-              font=\small\itshape},
-  exp/.style={draw, rounded corners=2pt, minimum width=1.7cm,
-              minimum height=0.65cm, align=center, fill=green!10},
-  band/.style={draw, dashed, rounded corners=4pt, inner sep=8pt,
-               line width=0.4pt},
-  >={Latex[length=2mm]}
-]
-% --- Top row: agent fleet --------------------------------------------
-\node[agent]            (a1) {Agent A};
-\node[agent, right=of a1] (a2) {Agent B};
-\node[agent, right=of a2] (a3) {Agent C};
-\node[agent, right=of a3] (a4) {Agent D};
-\node[left=0.1cm of a1]   (fleetlabel) {\textit{Fleet}};
-
-% --- Middle row: MemClaw governance dimensions -----------------------
-\node[dim, below=1.6cm of a1] (d1) {scope};
-\node[dim, right=of d1]       (d2) {time};
-\node[dim, right=of d2]       (d3) {provenance};
-\node[dim, right=of d3]       (d4) {propagation};
-\node[left=0.1cm of d1]       (mclawlabel) {\textbf{MemClaw}};
-
-% --- Bottom row: AgentFleetMem (``Argus'') experiments ---------------
-\node[exp, below=1.6cm of d1] (e1) {leakage};
-\node[exp, right=of e1]       (e2) {contradiction};
-\node[exp, right=of e2]       (e3) {provenance};
-\node[exp, right=of e3]       (e4) {propagation};
-\node[left=0.1cm of e1]       (arguslabel) {\textbf{Argus}};
-
-% --- Agents <-> MemClaw (writes/reads via REST) -----------------------
-\foreach \a/\d in {a1/d1, a2/d2, a3/d3, a4/d4} {
-  \draw[<->, >=Latex] (\a) -- (\d);
-}
-
-% --- Argus -> MemClaw (probes the same REST surface) ------------------
-\foreach \e/\d in {e1/d1, e2/d2, e3/d3, e4/d4} {
-  \draw[<->, dashed, >=Latex] (\e) -- (\d);
-}
-
-% --- Background bands (subtle grouping) -------------------------------
-\begin{scope}[on background layer]
-  \node[band, fit=(a1)(a4)] {};
-  \node[band, fit=(d1)(d4)] {};
-  \node[band, fit=(e1)(e4)] {};
-\end{scope}
-\end{tikzpicture}
+\includegraphics[width=0.85\linewidth]{figures/figure_1_system_overview.png}
 \caption{System overview. A fleet of cooperating agents (top) writes
 and reads governed memory through MemClaw's REST API. MemClaw enforces
 four governance dimensions --- scope, time, provenance, and propagation
