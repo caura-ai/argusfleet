@@ -96,6 +96,17 @@ which releases the dedup gate since MemClaw's duplicate detectors filter
 purge targets each tenant in `MEMCLAW_TENANT_ID` and requires a key with
 `write` capability scoped to that tenant (no elevated trust needed).
 
+### Agent-scoped GET-by-id probe
+
+`scripts/agent_scope_probe.py` provisions two agent-scoped credentials
+(`POST /api/v1/admin/agent-keys/provision`, `kind=agent_key`) at trust 1
+and 2 using the tenant key, confirms identity via `/whoami`, then fetches
+a cross-fleet row by id with each. It shows the `GET`-by-id enforcement
+gap is credential-independent (the handler checks only the tenant, so a
+trust-1 agent reads a cross-fleet row). Self-cleaning and re-runnable; the
+two agent keys persist (revoke them in the dashboard). See paper §8.1 /
+Table 3.
+
 ### Multi-tenant configuration
 
 Cross-tenant leakage requires ≥2 tenant IDs. Configure with
