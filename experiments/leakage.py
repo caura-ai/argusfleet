@@ -147,7 +147,11 @@ def _build_plan(cfg: HarnessConfig, *, nonce: str) -> _ScenarioPlan:
         token = uuid.UUID(int=rng.getrandbits(128), version=4).hex[:12]
         for scope in (MemoryScope.FLEET, MemoryScope.AGENT):
             tpl = secret_templates[owner_counter % len(secret_templates)]
-            prose = tpl.format(n=f"{owner_counter}-{scope.value}")
+            # Include the run nonce in the substitution so each invocation
+            # produces semantically fresh prose. Without this, the server's
+            # near-duplicate gate 409s the writes on second + subsequent
+            # runs against the same tenant.
+            prose = tpl.format(n=f"{owner_counter}-{scope.value}-{nonce[-12:]}")
             owner_counter += 1
             secrets.append(
                 {
