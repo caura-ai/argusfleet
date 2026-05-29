@@ -46,36 +46,28 @@ Nurit Cohen-Inger (Ben-Gurion University of the Negev)
 % =================== LEFT COLUMN ======================================
 \begin{column}{0.48\textwidth}
 
-\textbf{Thesis.} AI memory is shifting from a context-window problem to a
-distributed-systems problem: governance, synchronization, temporal
-correctness, provenance, scoped access. We propose four architectural
-primitives, instantiate them in \textbf{MemClaw} (production
-\texttt{memclaw.net}), and evaluate via \textbf{ArgusFleet} ---
-4 experiments $\to$ 5 metric axes against a live service.
-
-\vspace{0.4em}
-
-\textbf{Failure-mode taxonomy} (4 modes $\to$ 4 experiments)
-\begin{itemize}\setlength\itemsep{0.05em}\setlength\parskip{0pt}
-  \item Unauthorized leakage \quad \textbullet\ Stale propagation
-  \item Contradiction persistence \quad \textbullet\ Provenance collapse
-\end{itemize}
+\textbf{Thesis.} AI memory is shifting from a context-window problem to
+a distributed-systems problem: governance, synchronization, temporal
+correctness, provenance, scoped access. We propose four primitives,
+instantiate them in \textbf{MemClaw} (\texttt{memclaw.net}) and evaluate
+via \textbf{ArgusFleet} --- 4 experiments $\to$ 5 metric axes against a
+live service. Failure modes: leakage, stale propagation, contradiction
+persistence, provenance collapse.
 
 \vspace{0.3em}
 
 \textbf{Three architectural findings}
-\begin{enumerate}\setlength\itemsep{0.15em}\setlength\parskip{0pt}
+\begin{enumerate}\setlength\itemsep{0.1em}\setlength\parskip{0pt}\setlength\leftmargin{1em}
   \item \textcolor{warn}{\textbf{Scope enforcement is bimodal.}}
-        Tenant uniformly; sub-tenant only on search, not on direct
-        \texttt{GET}-by-id. Caused by tenant-scoped keys carrying no
-        agent identity --- a property of the auth model, not the server.
+        Tenant uniformly; sub-tenant only on search, not on
+        \texttt{GET}-by-id --- tenant-scoped keys carry no agent identity.
+        A property of the auth model, not a server defect.
   \item \textcolor{warn}{\textbf{Dedup precedes contradiction detection.}}
-        Embedding-similarity \texttt{409}s block contradictions even on
-        a clean tenant. Pipeline ordering needs to invert when an RDF
-        triple is present.
+        Embedding \texttt{409}s block detection even on a clean tenant.
+        Pipeline ordering should invert when an RDF triple is present.
   \item \textcolor{warn}{\textbf{Cross-agent propagation is privilege-gated.}}
-        \texttt{redistribute} needs \texttt{trust\_level $\ge$ 3} ---
-        conflates fleet-internal propagation with admin migration.
+        \texttt{redistribute} requires \texttt{trust\_level $\ge$ 3},
+        conflating fleet-internal propagation with admin migration.
 \end{enumerate}
 
 \end{column}
@@ -116,29 +108,25 @@ Primitive & Signal & Result \\
 \vspace{0.5em}
 
 \textbf{Take-aways}
-\begin{itemize}\setlength\itemsep{0.08em}\setlength\parskip{0pt}
-  \item Tenant scope holds; within-tenant scope enforced asymmetrically
-        on \textcolor{warn}{GET vs search}.
-  \item Provenance walks at \textcolor{good}{sub-second latency} with
-        \textcolor{good}{1.00 identity accuracy} through round-trips.
-  \item Propagation: \textcolor{good}{zero cross-fleet leaks at $n=40$};
-        \textcolor{warn}{$\sim$80 s eventual-consistency window}.
-  \item Contradiction null is \textcolor{warn}{architectural, not a defect}
-        --- intra-run dedup blocks the detector on a clean tenant.
+\begin{itemize}\setlength\itemsep{0.05em}\setlength\parskip{0pt}\setlength\leftmargin{1em}
+  \item Within-tenant scope: \textcolor{warn}{asymmetric on GET vs search}.
+  \item Provenance: \textcolor{good}{sub-second}, \textcolor{good}{1.00 accuracy}.
+  \item Propagation: \textcolor{good}{0 leaks at $n=40$},
+        \textcolor{warn}{$\sim$80 s window}.
+  \item Contradiction null is \textcolor{warn}{architectural} --- intra-run dedup.
 \end{itemize}
 
 \end{column}
 
 \end{columns}
 
-\vspace{0.3em}
-\hrule height 0.4pt
 \vspace{0.2em}
+\hrule height 0.4pt
+\vspace{0.15em}
 {\scriptsize\itshape
-\textbf{Limitations:} single tenant; tenant-scoped key (no agent
-identity, so sub-tenant GET enforcement is structurally untestable);
-$N=100$; no baseline. \hfill
-\texttt{memclaw.net} \,/\, \texttt{github.com/caura-ai/agentfleetmem}}
+\textbf{Limitations:} single tenant; tenant-scoped key (sub-tenant GET
+enforcement structurally untestable); $N=100$; no baseline. \hfill
+\texttt{memclaw.net} / \texttt{github.com/caura-ai/agentfleetmem}}
 
 \end{frame}
 
