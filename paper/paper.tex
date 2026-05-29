@@ -16,9 +16,10 @@
 \usepackage[margin=0.75in,columnsep=0.28in]{geometry}
 \usepackage{booktabs}
 \usepackage{graphicx}
-% Explicit ``figures/`` paths are used on every \includegraphics so the
-% paper builds whether or not \graphicspath is honoured by the host
-% (Overleaf preserves subdirectories; some upload flows flatten them).
+% Every \includegraphics uses a bare filename. The \graphicspath below
+% searches both the ``figures/`` subdirectory (normal layout) and the
+% current directory (flat upload, e.g. some Overleaf import flows), so
+% the same source compiles under either layout without edits.
 \graphicspath{{figures/}{./}}
 \usepackage{multirow}
 \usepackage{enumitem}
