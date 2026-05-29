@@ -76,9 +76,13 @@ and reads governed memory through MemClaw's REST API. MemClaw enforces
 four governance dimensions --- scope, time, provenance, and propagation
 --- that jointly characterise operational correctness in fleet-memory
 systems. The ArgusFleet evaluation harness (bottom) probes the same REST API
-surface with one experiment per dimension. The horizontal alignment
-between governance dimensions and ArgusFleet experiments reflects a 1:1
-mapping: each experiment measures the dimension directly above it.}
+surface with one experiment per dimension. The vertical alignment indicates
+which dimension each experiment \emph{probes}, not a claim of exhaustive
+coverage: leakage, provenance, and propagation are measured directly, while the
+\emph{stale propagation} dimension (\S\ref{sec:failures}) is only partially
+exercised --- the propagation experiment captures its visibility-latency facet,
+but the staleness-after-supersession facet is not measurable on the system under
+test, since no supersession relationship is ever established (\S\ref{sec:limitations}).}
 \label{fig:overview}
 \end{figure*}
 
@@ -117,6 +121,7 @@ A line of recent agent-memory architectures --- including MemGPT and its success
 Once memory is genuinely shared across agents, the operational concerns mirror those of traditional distributed systems: synchronisation, consistency, access governance, temporal ordering, event propagation, and auditability. Production AI memory systems therefore increasingly resemble distributed databases~\citep{dynamo2007, spanner2013}, event-sourcing and weakly-connected replicated stores~\citep{bayou1995, crdt2011}, synchronisation layers~\citep{lamport1978}, and governance middleware~\citep{rbac1996, nist_attribute_based} --- not the retrieval indexes from which the agent-memory line of work descended. This suggests that memory infrastructure may become a foundational systems layer for future AI architectures, and that the methods and primitives developed for distributed state are the right vocabulary for reasoning about it.
 
 \section{The Fleet-Memory Problem}
+\label{sec:problem}
 
 Modern AI deployments are increasingly composed not of a single assistant but of fleets of specialised agents operating over shared persistent state. A customer-support agent may update a user's billing record in a way that subsequently affects a planning agent's schedule, an analytics agent's dashboard, a workflow orchestrator's routing logic, and a downstream compliance system's audit trail. A research agent may surface a finding that synthesis agents, verification agents, reporting systems, and autonomous workflows all need to consume hours or days later. In these environments, memory is no longer ``conversation history''; it is shared operational state, and the correctness story it must support has more in common with shared-storage subsystems than with retrieval indexes.
 
@@ -215,6 +220,25 @@ In fleet-memory systems, retrieval correctness additionally depends on:
     \item provenance validity,
     \item and synchronization guarantees.
 \end{itemize}
+
+We make the authorization requirement precise, since it is the one the
+evaluation falsifies. Let \(\mathrm{auth}(a_j, s_i, G)\) denote the predicate
+``agent \(a_j\) is entitled, under governance \(G\), to view a memory carrying
+scope \(s_i\),'' where \(s_i\) decomposes into nested levels (agent
+\(\sqsubseteq\) fleet \(\sqsubseteq\) tenant; \S\ref{sec:impl}). A retrieval is
+\emph{scope-sound} when
+\[
+w_i \in r_j \;\Longrightarrow\; \mathrm{auth}(a_j, s_i, G).
+\tag{\textsc{Inv-Scope}}
+\]
+That is, no agent receives a memory its identity is not entitled to under the
+row's scope. \textsc{Inv-Scope} is the formal content of the unauthorized-leakage
+failure mode (\S\ref{sec:failures}): a leak is exactly a violation of it. A
+correct governed-memory implementation must evaluate the \emph{full} scope
+predicate on every retrieval path; as \S\ref{sec:results} shows, the
+\(\mathtt{GET}\)-by-id path evaluates only the tenant projection of \(s_i\) and so
+violates \textsc{Inv-Scope} for any fleet- or agent-scoped row --- the formalism
+predicts the bug the experiment measures.
 
 This distinction becomes critical once memory evolves from passive context into shared operational infrastructure.
 
@@ -462,7 +486,7 @@ Across \(96\) probes spanning \(80\) expected-deny and \(16\) expected-allow com
 \item On the secondary \textbf{discovery} axis (semantic search with the probing fleet in \(\mathtt{fleet\_ids}\)), \textsc{search\_leak\_rate} \(= 34/80 = 0.425\) and \textsc{search\_miss\_rate} \(= 4/16 = 0.250\). The search path \emph{partially} honours the fleet filter --- roughly \(43\%\) of cross-fleet probes still surfaced the row, and a quarter of same-fleet probes missed it under embedding-similarity ranking.
 \end{itemize}
 
-A natural objection is that the access leak is merely an artifact of the tenant key carrying no agent identity --- give the gateway an agent identity to filter on and the leak would close. We tested that objection directly with the agent-scoped probe (\S\ref{sec:method}), and it does not hold. The gateway \emph{does} resolve the agent identity for a \(\mathtt{kind{=}agent\_key}\) credential (\texttt{/whoami} returns the bound \(\mathtt{agent\_id}\); a tenant key returns \(\mathtt{agent\_id{=}null}\)), yet \(\mathtt{GET}\)-by-id still returns cross-fleet rows: an agent bound to \(\mathtt{fleet\text{-}0}\) at \(\text{trust}=1\) --- below the trust-\(2\) cross-fleet-read rung --- successfully fetched a \(\mathtt{fleet\text{-}1}\) row, while its same-fleet control and the trust-\(2\) credential behaved as expected (Table~\ref{tab:agentscope}). Inspecting the handler confirms the cause: \(\mathtt{GET\ /memories/\{id\}}\) checks only \(\mathtt{enforce\_readable\_tenant}\) and \(\mathtt{memory.tenant\_id == tenant\_id}\); it never consults the caller's fleet, agent, the row's visibility scope, or the trust level, so the resolved \(\mathtt{agent\_id}\) is discarded. The access leak is therefore a genuine \emph{enforcement gap} on the \(\mathtt{GET}\) path, not an authentication-model artifact: sub-tenant scope and the trust ladder are not applied to direct id-fetch for any credential type. The practical consequence --- any agent that learns a peer's \(\mathtt{memory\_id}\) (including another agent's agent-scoped secret) can read it --- is discussed in \S\ref{sec:findings}.
+A natural objection is that the access leak is merely an artifact of the tenant key carrying no agent identity --- give the gateway an agent identity to filter on and the leak would close. We tested that objection directly with the agent-scoped probe (\S\ref{sec:method}), and it does not hold. The gateway \emph{does} resolve the agent identity for a \(\mathtt{kind{=}agent\_key}\) credential (\texttt{/whoami} returns the bound \(\mathtt{agent\_id}\); a tenant key returns \(\mathtt{agent\_id{=}null}\)), yet \(\mathtt{GET}\)-by-id still returns cross-fleet rows: an agent bound to \(\mathtt{fleet\text{-}0}\) at \(\text{trust}=1\) --- below the trust-\(2\) cross-fleet-read rung --- successfully fetched a \(\mathtt{fleet\text{-}1}\) row, while its same-fleet control and the trust-\(2\) credential behaved as expected (Table~\ref{tab:agentscope}). Inspecting the handler confirms the cause: \(\mathtt{GET\ /memories/\{id\}}\) checks only \(\mathtt{enforce\_readable\_tenant}\) and \(\mathtt{memory.tenant\_id == tenant\_id}\); it never consults the caller's fleet, agent, the row's visibility scope, or the trust level, so the resolved \(\mathtt{agent\_id}\) is discarded. The access leak is therefore a genuine \emph{enforcement gap} on the \(\mathtt{GET}\) path, not an authentication-model artifact: sub-tenant scope and the trust ladder are not applied to direct id-fetch for any credential type. In the terms of \S\ref{sec:problem}, the handler discharges only the tenant projection of \(s_i\), so it violates \textsc{Inv-Scope} for every fleet- or agent-scoped row --- the measured leak is exactly the predicted violation. The practical consequence --- any agent that learns a peer's \(\mathtt{memory\_id}\) (including another agent's agent-scoped secret) can read it --- is discussed in \S\ref{sec:findings}.
 
 \begin{table}[H]
 \centering
@@ -568,7 +592,7 @@ The leakage experiment surfaces a structural asymmetry in how scope is enforced.
 
 Direct \(\mathtt{GET}\)-by-id returns a row to any caller who presents the correct \(\mathtt{tenant\_id}\), regardless of the originating fleet or writer. Crucially, this holds even when the caller presents an agent-scoped credential whose identity the gateway resolves (\S\ref{sec:results}, Table~\ref{tab:agentscope}): the \(\mathtt{get\_memory}\) handler enforces only the tenant predicate (\(\mathtt{enforce\_readable\_tenant}\) plus \(\mathtt{memory.tenant\_id == tenant\_id}\)) and never consults the caller's fleet/agent, the row's visibility scope, or the trust level --- so the agent identity, present in-request as \(\mathtt{X\text{-}Agent\text{-}ID}\), is simply discarded. Search, by contrast, accepts \(\mathtt{fleet\_ids}\) in the request body and applies it as a filter, but the filter coexists with embedding-similarity ranking: in our measurement \(42.5\%\) (\(34/80\)) of cross-fleet probes still surfaced the row.
 
-We initially conjectured this asymmetry was a property of the authentication model rather than a defect --- that agent-scoped keys would let the gateway resolve a requesting agent's fleet and apply scope to \(\mathtt{GET}\) as it does to search. The probe in \S\ref{sec:results} refutes that conjecture: the identity \emph{is} resolved and then ignored by the handler, so a trust-\(1\) agent reads a cross-fleet row that the trust ladder should deny. It is therefore a genuine enforcement gap, not a credential limitation. Production deployments predominantly issue tenant-scoped keys, but agent-scoped ones do not close it either, which means \emph{in practice any agent within a tenant who learns a peer's \(\mathtt{memory\_id}\) can read the row}, including another agent's agent-scoped secret. Closing it requires the id-fetch handler to apply the same fleet/agent/scope filter the search path already carries and to honour the trust ladder; until then, the propagation of \(\mathtt{memory\_id}\) values across fleet boundaries is itself the de-facto capability boundary --- an underexplored and fragile interaction between identity and primitive design.
+We initially conjectured this asymmetry was a property of the authentication model rather than a defect --- that agent-scoped keys would let the gateway resolve a requesting agent's fleet and apply scope to \(\mathtt{GET}\) as it does to search. The probe in \S\ref{sec:results} refutes that conjecture: the identity \emph{is} resolved and then ignored by the handler, so a trust-\(1\) agent reads a cross-fleet row that the trust ladder should deny. It is therefore a genuine enforcement gap --- a standing violation of \textsc{Inv-Scope} (\S\ref{sec:problem}) --- not a credential limitation. Production deployments predominantly issue tenant-scoped keys, but agent-scoped ones do not close it either, which means \emph{in practice any agent within a tenant who learns a peer's \(\mathtt{memory\_id}\) can read the row}, including another agent's agent-scoped secret. Closing it requires the id-fetch handler to apply the same fleet/agent/scope filter the search path already carries and to honour the trust ladder; until then, the propagation of \(\mathtt{memory\_id}\) values across fleet boundaries is itself the de-facto capability boundary --- an underexplored and fragile interaction between identity and primitive design.
 
 \subsection{Deduplication Precedes Contradiction Detection}
 
@@ -596,6 +620,9 @@ ArgusFleet and MemClaw are built by the same group; this is an evaluation of our
 
 \paragraph{Agent-scope probe is focused, not exhaustive.}
 The bulk leakage rates were collected with a tenant-scoped key, but we separately provisioned agent-scoped credentials and confirmed (Table~\ref{tab:agentscope}, \S\ref{sec:findings-bimodal}) that the \(\mathtt{GET}\)-by-id enforcement gap is credential-independent --- the gateway resolves the agent identity and the handler ignores it. That probe is deliberately small: one trust-\(1\) cross-fleet read, one trust-\(2\) control, one same-fleet control, each on a single row. The conclusion rests as much on reading the \(\mathtt{get\_memory}\) handler (which contains no fleet/agent/scope predicate) as on the probe, but a fuller adversarial matrix --- many agents, fleets, trust levels, and scopes --- would harden the rate estimate. Cross-\emph{tenant} isolation remains untested for the separate reason below.
+
+\paragraph{Stale propagation is not directly measured.}
+The \(\mathtt{stale\_read}\) signal (\S\ref{sec:method}) captures simultaneous coexistence of conflicting active rows, not staleness \emph{after} a supersession --- one agent serving a value another has already overwritten. Constructing that case needs the server to establish a supersedes relationship, which it never does: a probe writing \(v_1\) and then a contradictory \(v_2\) (distinct prose, same \(\langle\)entity, predicate\(\rangle\), so dedup did not reject it) produced two \texttt{confirmed} rows with \(\mathtt{supersedes\_id} = \varnothing\) on both --- consistent with the dedup-before-contradiction finding (\S\ref{sec:findings}). The stale-propagation dimension is therefore exercised only through its visibility-latency facet (\S\ref{sec:results}); the staleness-after-supersession facet awaits a service that performs supersession at all.
 
 \paragraph{Single tenant.}
 All measurements were collected from a single MemClaw tenant, freshly provisioned. The cross-\emph{tenant} leakage probe surface, which would exercise the strongest governance claim, is not measurable in this configuration. The harness supports multi-tenant configuration via the \texttt{MEMCLAW\_TENANT\_ID} list and we expect cross-tenant probes to be uniformly rejected by the gateway's tenant enforcement (\S\ref{sec:findings-bimodal}); confirming that empirically remains future work.
