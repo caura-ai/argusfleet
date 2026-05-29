@@ -514,7 +514,15 @@ Every workload is seeded. Plan structure (fleets, agents, fact subjects, chain s
 The client is built on \texttt{httpx} and \texttt{tenacity} with exponential backoff for transient transport errors and 5xx responses; 4xx responses are surfaced to the experiment unmodified, since 4xx is precisely the governance signal we are measuring. Concurrency caps are configured per experiment to remain below the per-tenant search rate limit (\(100\) req/min on \texttt{/search}).
 
 \paragraph{Domain model.}
-The harness implements typed Pydantic models for \texttt{Agent}, \texttt{Tenant}, \texttt{Fleet}, \texttt{Memory}, \texttt{Provenance}, \texttt{RetrievalEvent}, \texttt{WriteEvent}, and \texttt{PolicyDecision}. These are decoupled from MemClaw's wire schema; an adapter translates between them and the REST surface, so the harness can be retargeted to alternative governed-memory implementations.
+Per-probe and per-write events are appended to the JSONL trace as
+plain dictionaries; the harness ships typed Pydantic models for the two
+records where typing actually pays off --- \texttt{MemoryScope} (the
+ground-truth scope enum the leakage experiment reasons about) and
+\texttt{PolicyDecision} (the audit-grade record of an observed
+governance outcome). Translating between the dict events and the
+MemClaw wire schema is delegated to the async client (\S6.1) so the
+harness can be retargeted to alternative governed-memory implementations
+without changing the experiment code.
 
 \section{Evaluation Methodology}
 \label{sec:method}

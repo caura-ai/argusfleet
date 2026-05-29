@@ -19,9 +19,6 @@ scipy==1.17.1
 pyyaml==6.0.3
 python-dotenv==1.2.2
 tenacity==9.1.4
-rich==15.0.0
-structlog==25.5.0
-networkx==3.6.1
 
 # Test tooling
 pytest==9.0.3

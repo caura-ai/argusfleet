@@ -1,33 +1,22 @@
-"""Smoke tests for the core domain models."""
+"""Smoke tests for the domain models that the experiments actually use."""
 
 from __future__ import annotations
 
-from agentfleetmem.harness.models import (
-    Memory,
-    MemoryScope,
-    PolicyDecision,
-    Provenance,
-    RetrievalEvent,
-    WriteEvent,
-)
+from agentfleetmem.harness.models import MemoryScope, PolicyDecision
 
 
-def test_memory_roundtrip() -> None:
-    m = Memory(
-        content="alpha",
-        writer_agent="agent-a",
-        tenant_id="mc_t1",
-        fleet_id="fleet-1",
-        scope=MemoryScope.FLEET,
-        provenance=Provenance(writer_agent="agent-a", reason="seed"),
-    )
-    blob = m.model_dump(mode="json")
-    again = Memory.model_validate(blob)
-    assert again.content == "alpha"
-    assert again.scope is MemoryScope.FLEET
+def test_memory_scope_values() -> None:
+    """The enum's string values are what the experiments encode into
+    metadata and what the server's ``visibility`` field expects after
+    the leakage scope-to-visibility mapping."""
+    assert MemoryScope.AGENT.value == "agent"
+    assert MemoryScope.FLEET.value == "fleet"
+    assert MemoryScope.TENANT.value == "tenant"
+    assert MemoryScope.PUBLIC.value == "public"
 
 
 def test_policy_decision_violation_flag() -> None:
+    """``is_violation`` flips iff observed != expected decision."""
     ok = PolicyDecision(
         actor_agent="probe",
         actor_tenant="mc_t1",
@@ -42,17 +31,20 @@ def test_policy_decision_violation_flag() -> None:
     assert bad.is_violation
 
 
-def test_event_defaults() -> None:
-    r = RetrievalEvent(
-        requester_agent="a",
-        requester_tenant="mc_t1",
-        query="canary",
-        top_k=5,
+def test_policy_decision_roundtrip() -> None:
+    """The model serialises to JSON and reloads cleanly — the leakage
+    experiment depends on this for ``events.jsonl`` reproducibility."""
+    pd = PolicyDecision(
+        actor_agent="agent-a",
+        actor_tenant="mc_t1",
+        target_scope=MemoryScope.AGENT,
+        target_tenant="mc_t1",
+        action="read",
+        decision="allow",
+        expected_decision="allow",
+        reason="GET returned 200",
     )
-    w = WriteEvent(
-        writer_agent="a",
-        tenant_id="mc_t1",
-        scope=MemoryScope.AGENT,
-    )
-    assert r.returned_count == 0
-    assert w.succeeded is True
+    blob = pd.model_dump(mode="json")
+    again = PolicyDecision.model_validate(blob)
+    assert again.target_scope is MemoryScope.AGENT
+    assert again.is_violation is False
