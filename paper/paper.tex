@@ -2,7 +2,9 @@
 
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
-\usepackage{lmodern}
+% Times-family text + matching math. Drops the slightly open look of
+% Latin Modern in favour of a denser, more "submitted-paper" feel.
+\usepackage{newtxtext,newtxmath}
 % Tighter margins and a sensible inter-column gap for the two-column
 % layout. Comparable to ACM/USENIX preprint defaults without using
 % their full template machinery.
@@ -32,9 +34,8 @@ Governed Shared Memory for Multi-Agent LLM Systems
 }
 
 \author{
-  Yanki Margalit \\
-  Caura, Inc. \\
-  \texttt{yanki@caura.ai}
+  Yanki Margalit\thanks{\texttt{yanki@caura.ai}} \\
+  Caura.ai
 }
 
 \date{}
