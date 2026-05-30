@@ -1,0 +1,13 @@
+metric,value
+n_chains,50.0
+completeness_rate,1.0
+accuracy_rate,1.0
+accuracy_n_eval,50.0
+depth_fidelity_rate,1.0
+n_writes,200.0
+n_fetches,200.0
+fetch_latency_count,200.0
+fetch_latency_mean,342.5194309990911
+fetch_latency_p50,291.3993500114884
+fetch_latency_p95,491.44294499856176
+fetch_latency_p99,1075.7069500090413
