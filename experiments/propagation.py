@@ -248,6 +248,7 @@ async def _poll_visibility(
     sink: JsonlSink,
     timeout_ms: float,
     poll_interval_ms: float,
+    rate_gate: asyncio.Semaphore,
 ) -> dict[str, Any]:
     """Poll search until the canary shows up or the timeout expires.
 
@@ -277,12 +278,20 @@ async def _poll_visibility(
             #
             # filter_agent_id intentionally omitted — see leakage.py for
             # the rationale.
-            resp = await client.search_memory(
-                tenant_id=plan.tenant_id,
-                fleet_ids=[reader_fleet],
-                query=query,
-                top_k=10,
-            )
+            #
+            # Hold the rate gate only around the HTTP search, not across the
+            # inter-poll sleep below: otherwise a probe parked in
+            # ``asyncio.sleep`` would occupy an in-flight slot while issuing
+            # no request, starving sibling probes and inflating the measured
+            # ``t_visible_ms``. (Mirrors ``_WriteRateLimiter``'s wait-after-
+            # release design.)
+            async with rate_gate:
+                resp = await client.search_memory(
+                    tenant_id=plan.tenant_id,
+                    fleet_ids=[reader_fleet],
+                    query=query,
+                    top_k=10,
+                )
             last_status = resp.status_code
             last_trace = resp.trace_id
             items = (resp.json or {}).get("items") if isinstance(resp.json, dict) else []
@@ -449,20 +458,20 @@ async def run(
             async def _do_probe(
                 token: str, reader_agent: str, reader_fleet: str, relation: str
             ) -> None:
-                async with rate_gate:
-                    await _poll_visibility(
-                        c,
-                        plan=plan,
-                        reader_agent=reader_agent,
-                        reader_fleet=reader_fleet,
-                        reader_relation=relation,
-                        token=token,
-                        query=prose_by_token.get(token, token),
-                        write_record=writes.get(token, {}),
-                        sink=sink,
-                        timeout_ms=visibility_timeout_ms,
-                        poll_interval_ms=poll_interval_ms,
-                    )
+                await _poll_visibility(
+                    c,
+                    plan=plan,
+                    reader_agent=reader_agent,
+                    reader_fleet=reader_fleet,
+                    reader_relation=relation,
+                    token=token,
+                    query=prose_by_token.get(token, token),
+                    write_record=writes.get(token, {}),
+                    sink=sink,
+                    timeout_ms=visibility_timeout_ms,
+                    poll_interval_ms=poll_interval_ms,
+                    rate_gate=rate_gate,
+                )
 
             probe_coros: list[asyncio.Task] = []
             for token, rec in writes.items():

@@ -288,3 +288,68 @@ async def test_4xx_does_not_retry() -> None:
     assert exc.value.status_code == 403
     # The retry loop must not have fired more than once on a 4xx.
     assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_persistent_5xx_preserves_status_code() -> None:
+    """B8: a 5xx that survives all retries must surface as MemClawError with
+    the real status (e.g. 503), not the generic transport status 0 — so the
+    JSONL artifacts can tell a server error from a connection failure."""
+    async with MemClawClient(
+        "https://memclaw.test", api_key="k", max_retries=3, min_write_interval_ms=0.0
+    ) as client:
+        with respx.mock(base_url="https://memclaw.test") as router:
+            route = router.post("/api/v1/memories").mock(
+                return_value=httpx.Response(503, json={"detail": "overloaded"})
+            )
+            with pytest.raises(MemClawError) as exc:
+                await client.write_memory(tenant_id="mc_t1", agent_id="a", content="x")
+    assert exc.value.status_code == 503
+    assert route.call_count == 3  # retried to exhaustion
+
+
+@pytest.mark.asyncio
+async def test_connection_failure_reports_status_zero() -> None:
+    """A genuine transport failure (no HTTP response) still reports status 0,
+    distinct from a server 5xx (B8)."""
+    async with MemClawClient(
+        "https://memclaw.test", api_key="k", max_retries=2, min_write_interval_ms=0.0
+    ) as client:
+        with respx.mock(base_url="https://memclaw.test") as router:
+            router.post("/api/v1/memories").mock(
+                side_effect=httpx.ConnectError("refused")
+            )
+            with pytest.raises(MemClawError) as exc:
+                await client.write_memory(tenant_id="mc_t1", agent_id="a", content="x")
+    assert exc.value.status_code == 0
+
+
+@pytest.mark.asyncio
+async def test_rate_limiter_reacquired_on_each_retry() -> None:
+    """B9: one logical write that re-fires its POST under a transient 5xx
+    must re-acquire a limiter slot per attempt — otherwise retries bypass the
+    per-tenant write ceiling the limiter exists to respect."""
+    async with MemClawClient(
+        "https://memclaw.test", api_key="k", max_retries=3, min_write_interval_ms=0.0
+    ) as client:
+        acquires = {"n": 0}
+        orig_acquire = client._write_limiter.acquire
+
+        async def counting_acquire() -> None:
+            acquires["n"] += 1
+            await orig_acquire()
+
+        client._write_limiter.acquire = counting_acquire  # type: ignore[method-assign]
+
+        with respx.mock(base_url="https://memclaw.test") as router:
+            # First attempt 503 (retryable), second attempt succeeds.
+            route = router.post("/api/v1/memories").mock(
+                side_effect=[
+                    httpx.Response(503, json={"detail": "busy"}),
+                    httpx.Response(201, json={"id": "1"}),
+                ]
+            )
+            await client.write_memory(tenant_id="mc_t1", agent_id="a", content="x")
+
+    assert route.call_count == 2  # POST re-fired on the retry
+    assert acquires["n"] == 2  # ...and a slot was re-acquired for it

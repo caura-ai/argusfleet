@@ -82,7 +82,10 @@ def load_config(
         or os.getenv("MEMCLAW_TENANT_IDS"),
     }
     for k, v in env_map.items():
-        if v is not None:
+        # Treat a set-but-empty env var (e.g. the shipped ``.env.example``'s
+        # ``MEMCLAW_API_KEY=``) as unset, so it doesn't clobber a YAML value
+        # with ``''``. ``os.getenv`` returns ``''`` (not ``None``) for these.
+        if v:
             data[k] = v
     if overrides:
         data.update(overrides)

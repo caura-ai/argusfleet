@@ -286,7 +286,12 @@ async def _verify_chain(
             "depth_planned": chain.depth,
             "depth_observed": 0,
             "complete": False,
+            # A leaf write failure is an availability problem, not a
+            # writer-identity substitution — we never compared an agent_id.
+            # Mark it ineligible so it's excluded from the accuracy
+            # denominator (B5) rather than deflating accuracy_rate.
             "accurate": False,
+            "accuracy_eligible": False,
             "depth_match": False,
             "broken_at": "root_or_intermediate_write_failed",
             "fetch_latency_ms_max": None,
@@ -299,8 +304,42 @@ async def _verify_chain(
     fetch_latencies: list[float] = []
     broken_at: str | None = None
     accurate = True
+    # Bound the walk. This experiment exists to detect provenance
+    # corruption, so a self-referential or fabricated-ancestor
+    # ``derived_from`` (exactly that corruption) would otherwise loop here
+    # forever — the per-request timeout caps each call, not their number.
+    # Stop on a repeated id or once we've walked past the planned depth, and
+    # record the anomaly as a broken link instead of hanging the gather.
+    visited: set[str] = set()
 
     while cursor_id is not None:
+        if cursor_id in visited:
+            broken_at = "cycle_detected"
+            sink.write(
+                "fetch",
+                {
+                    "chain_id": chain.chain_id,
+                    "memory_id": cursor_id,
+                    "ok": False,
+                    "status_code": None,
+                    "note": "cycle_detected",
+                },
+            )
+            break
+        if len(reconstructed) >= chain.depth:
+            broken_at = "exceeded_planned_depth"
+            sink.write(
+                "fetch",
+                {
+                    "chain_id": chain.chain_id,
+                    "memory_id": cursor_id,
+                    "ok": False,
+                    "status_code": None,
+                    "note": "exceeded_planned_depth",
+                },
+            )
+            break
+        visited.add(cursor_id)
         try:
             resp = await client.retrieve_memory(cursor_id, tenant_id=chain.tenant_id)
         except MemClawError as e:
@@ -357,8 +396,15 @@ async def _verify_chain(
         cursor_id = parents[0] if parents else None
 
     observed_depth = len(reconstructed)
-    # A complete chain has one row per planned depth and no broken link.
-    complete = broken_at is None and observed_depth == chain.depth
+    # Two INDEPENDENT metrics (they used to collapse into one):
+    #   completeness = link reachability — every link we followed resolved,
+    #     with no fetch error, cycle, or over-length anomaly. A server that
+    #     returns a valid but truncated chain (empty ``derived_from`` early)
+    #     is still complete here; a 404-ing one is not.
+    #   depth_match  = truncation/fidelity — the full planned depth surfaced.
+    # Decoupling them means a truncating server no longer scores identically
+    # to a 404-ing one.
+    complete = broken_at is None
     depth_match = observed_depth == chain.depth
 
     row = {
@@ -367,6 +413,7 @@ async def _verify_chain(
         "depth_observed": observed_depth,
         "complete": complete,
         "accurate": accurate,
+        "accuracy_eligible": True,
         "depth_match": depth_match,
         "broken_at": broken_at,
         "fetch_latency_ms_max": max(fetch_latencies) if fetch_latencies else None,
@@ -483,18 +530,32 @@ def _materialize_outputs(run_dir: Path, events_path: Path) -> dict[str, Any]:
 
     n = int(len(verifications))
     n_complete = int(verifications["complete"].sum()) if "complete" in verifications else 0
-    n_accurate = int(verifications["accurate"].sum()) if "accurate" in verifications else 0
     n_depth_match = (
         int(verifications["depth_match"].sum()) if "depth_match" in verifications else 0
     )
+    # Accuracy = writer-identity fidelity, measured only over chains that
+    # actually reached the comparison. Write-failed chains are flagged
+    # ``accuracy_eligible=False`` and dropped from the denominator (B5);
+    # rows predating the flag (no column) are treated as eligible.
+    if "accurate" in verifications.columns:
+        if "accuracy_eligible" in verifications.columns:
+            eligible = verifications[verifications["accuracy_eligible"] != False]  # noqa: E712
+        else:
+            eligible = verifications
+        n_accuracy_eval = int(len(eligible))
+        n_accurate = int(eligible["accurate"].sum())
+    else:
+        n_accuracy_eval = 0
+        n_accurate = 0
     completeness = n_complete / n if n else 0.0
-    accuracy = n_accurate / n if n else 0.0
+    accuracy = n_accurate / n_accuracy_eval if n_accuracy_eval else 0.0
     depth_fidelity = n_depth_match / n if n else 0.0
 
     summary_rows: list[dict[str, Any]] = [
         {"metric": "n_chains", "value": n},
         {"metric": "completeness_rate", "value": completeness},
         {"metric": "accuracy_rate", "value": accuracy},
+        {"metric": "accuracy_n_eval", "value": n_accuracy_eval},
         {"metric": "depth_fidelity_rate", "value": depth_fidelity},
         {"metric": "n_writes", "value": int(len(writes))},
         {"metric": "n_fetches", "value": int(len(fetches))},
@@ -514,5 +575,6 @@ def _materialize_outputs(run_dir: Path, events_path: Path) -> dict[str, Any]:
         "n_chains": n,
         "completeness_rate": completeness,
         "accuracy_rate": accuracy,
+        "accuracy_n_eval": n_accuracy_eval,
         "depth_fidelity_rate": depth_fidelity,
     }

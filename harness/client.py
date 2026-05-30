@@ -64,6 +64,21 @@ class MemClawResponse:
 _RETRYABLE_EXC = (httpx.TransportError, httpx.ReadTimeout, httpx.ConnectTimeout)
 
 
+class _RetryableStatus(httpx.TransportError):
+    """A retryable HTTP status (429 / 5xx) tagged with its originating code.
+
+    Subclassing ``TransportError`` keeps it inside ``_RETRYABLE_EXC`` so
+    tenacity retries it. Carrying ``status_code`` lets the exhaustion handler
+    surface the real server status (e.g. 503) instead of a generic ``0``, so
+    a persistent server 5xx is distinguishable from a connection failure in
+    the JSONL artifacts.
+    """
+
+    def __init__(self, status_code: int, message: str) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
 class _WriteRateLimiter:
     """Spaces write requests under MemClaw's per-tenant write ceiling.
 
@@ -203,8 +218,9 @@ class MemClawClient:
         if idempotency_key:
             headers["Idempotency-Key"] = idempotency_key
 
-        await self._write_limiter.acquire()
-        return await self._request("POST", "/memories", json=body, extra_headers=headers)
+        return await self._request(
+            "POST", "/memories", json=body, extra_headers=headers, rate_limit=True
+        )
 
     async def search_memory(
         self,
@@ -302,8 +318,9 @@ class MemClawClient:
             body["fleet_id"] = fleet_id
         if attributes is not None:
             body["attributes"] = attributes
-        await self._write_limiter.acquire()
-        return await self._request("POST", "/entities/upsert", json=body)
+        return await self._request(
+            "POST", "/entities/upsert", json=body, rate_limit=True
+        )
 
     async def delete_all_memories(
         self,
@@ -396,6 +413,7 @@ class MemClawClient:
         json: Any = None,
         params: dict[str, Any] | None = None,
         extra_headers: dict[str, str] | None = None,
+        rate_limit: bool = False,
     ) -> MemClawResponse:
         url = f"{self._base_url}{path}"
         trace_id = uuid.uuid4().hex
@@ -406,14 +424,24 @@ class MemClawClient:
             headers.update(extra_headers)
 
         attempt_holder = {"n": 0}
+        # Stamp the start of the actual HTTP call so the reported latency
+        # excludes write-limiter spacing and tenacity backoff (which would
+        # otherwise inflate the headline write-latency metrics).
+        http_started = {"t": time.perf_counter()}
 
         async def _do() -> httpx.Response:
             attempt_holder["n"] += 1
+            # Re-acquire a write slot on *every* attempt: one logical write
+            # can re-fire its POST up to ``max_retries`` times under transient
+            # 429/5xx, and each fire is a real request that must count against
+            # the per-tenant ceiling the limiter exists to respect.
+            if rate_limit:
+                await self._write_limiter.acquire()
+            http_started["t"] = time.perf_counter()
             return await self._client.request(
                 method, url, json=json, params=params, headers=headers
             )
 
-        started = time.perf_counter()
         try:
             async for attempt in AsyncRetrying(
                 stop=stop_after_attempt(self._max_retries),
@@ -433,17 +461,23 @@ class MemClawClient:
                         # off and retries instead of aborting the caller
                         # (e.g. a provenance chain) mid-write. A persistent
                         # 429 still surfaces after retries are exhausted.
-                        raise httpx.TransportError(f"server 429: {resp.text[:200]}")
+                        raise _RetryableStatus(429, f"server 429: {resp.text[:200]}")
                     if resp.status_code >= 500:
-                        # Convert 5xx into a retryable transport-like error.
-                        raise httpx.TransportError(
-                            f"server {resp.status_code}: {resp.text[:200]}"
+                        # Convert 5xx into a retryable transport-like error,
+                        # tagged so the real status survives retry exhaustion.
+                        raise _RetryableStatus(
+                            resp.status_code,
+                            f"server {resp.status_code}: {resp.text[:200]}",
                         )
         except _RETRYABLE_EXC as e:
-            elapsed = (time.perf_counter() - started) * 1000.0
-            raise MemClawError(0, f"transport failure: {e}", trace_id=trace_id) from e
+            # Preserve the upstream status when we have it (429/5xx via
+            # _RetryableStatus); a genuine connection failure has none → 0.
+            status = getattr(e, "status_code", 0)
+            raise MemClawError(
+                status, f"transport failure: {e}", trace_id=trace_id
+            ) from e
 
-        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        elapsed_ms = (time.perf_counter() - http_started["t"]) * 1000.0
         try:
             payload = resp.json() if resp.content else None
         except ValueError:
