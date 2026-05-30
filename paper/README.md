@@ -4,12 +4,13 @@ LaTeX source for *Governed Shared Memory for Multi-Agent LLM Systems*.
 
 ## Files
 
-- `paper.tex` — main document (30 pages, 7 figures)
+- `paper.tex` — main document (8 figures)
 - `references.bib` — bibliography (starter; verify entries before submission)
-- `slide.tex` — single-slide Beamer summary (16:9 landscape, no nav chrome)
-- `onepager.md` — Markdown one-page executive summary
+- `extra - slide.tex` — single-slide Beamer summary (16:9 landscape, no nav chrome)
+- `extra - onepager.md` — Markdown one-page executive summary
 - `figures/` — PNG plots referenced by `paper.tex`
-- `paper_overleaf.zip` / `paper_overleaf_flat.zip` — upload-ready bundles for Overleaf
+- `paper_overleaf.zip` — upload-ready bundle for Overleaf
+- `../traces/` — committed `events.jsonl` + `summary.csv` for every run the paper cites
 
 ## Build
 
@@ -34,11 +35,11 @@ latexmk -pdf paper.tex
 The single-slide Beamer summary compiles standalone:
 
 ```bash
-pdflatex slide.tex
+pdflatex "extra - slide.tex"
 ```
 
-This produces `slide.pdf` (one 16:9 page) — drop into a deck, print as a
-poster handout, or screenshot for chat/social use.
+This produces `extra - slide.pdf` (one 16:9 page) — drop into a deck, print
+as a poster handout, or screenshot for chat/social use.
 
 ### Overleaf
 
@@ -88,6 +89,12 @@ contains the same headline metrics that the paper cites. When numbers
 in the paper drift from the latest run, regenerate the report and
 update Table 1.
 
+The exact event traces backing the published (N=200) numbers are committed
+under `../traces/` (commit `2c55bb5`) — `events.jsonl` + `summary.csv` for
+each run-of-record plus the four independent N=200 contradiction runs — so
+the tables and figures regenerate from a frozen, verifiable source rather
+than a transient local run. `../outputs/runs/` itself is gitignored.
+
 ## Refreshing figures after a re-run
 
 Figures live in `paper/figures/` with names of the form
@@ -130,9 +137,9 @@ add a `\ref{}` where you mention it.
 
 - The bibliography contains placeholder entries; verify titles, venues,
   years, and pages.
-- §8 numbers should be refreshed from a clean-tenant run for the camera
-  copy (see §10 Limitations).
-- The `\author{Anonymous Authors}` block needs to be updated for the
-  final submission.
+- §8 numbers are from an N=200 clean-tenant run with traces committed
+  under `../traces/`; re-verify against the latest run before the camera copy.
+- The `traces/` reproducibility anchor is a branch commit hash
+  (`2c55bb5`); convert it to a git tag or Zenodo DOI for submission.
 - `MemClaw` and `ArgusFleet` citation entries are placeholder URLs;
   replace with the actual artifact links once finalised.
