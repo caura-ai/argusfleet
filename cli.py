@@ -57,8 +57,14 @@ def _resolve_config(config: Path | None, seed: int | None, label: str | None) ->
     return load_config(config_path=config, overrides=overrides)
 
 
-async def _purge_tenants(cfg: HarnessConfig) -> dict[str, int]:
-    """Soft-delete every memory in each configured tenant.
+async def _purge_tenants(cfg: HarnessConfig, tenant_ids: list[str]) -> dict[str, int]:
+    """Soft-delete every memory in each of ``tenant_ids``.
+
+    Tenants are passed explicitly (not read from ``cfg.tenant_ids``) so
+    callers can purge the seed-synthesised IDs that experiments actually
+    write to in the default (no ``MEMCLAW_TENANT_ID``) mode — those never
+    land in ``cfg.tenant_ids``, so the old ``cfg``-driven purge silently
+    cleared nothing. Duplicates and empty strings are dropped.
 
     Returns ``{tenant_id: count_before}`` so callers can log how much was
     cleared. Because the server's dedup detectors all filter
@@ -70,8 +76,9 @@ async def _purge_tenants(cfg: HarnessConfig) -> dict[str, int]:
     from argusfleet.harness.client import MemClawError, memclaw_client
 
     cleared: dict[str, int] = {}
-    if not cfg.tenant_ids:
-        logging.warning("cleanup: no MEMCLAW_TENANT_ID configured — nothing to purge")
+    targets = list(dict.fromkeys(t for t in tenant_ids if t))
+    if not targets:
+        logging.warning("cleanup: no tenants to purge")
         return cleared
     async with memclaw_client(
         cfg.base_url,
@@ -79,7 +86,7 @@ async def _purge_tenants(cfg: HarnessConfig) -> dict[str, int]:
         timeout_s=cfg.request_timeout_s,
         max_retries=cfg.max_retries,
     ) as client:
-        for tenant in cfg.tenant_ids:
+        for tenant in targets:
             try:
                 before = await client.count_memories(tenant_id=tenant, include_deleted=False)
                 n = int((before.json or {}).get("total", 0)) if isinstance(before.json, dict) else 0
@@ -263,6 +270,9 @@ def run_all(
     }
 
     summary: dict[str, dict[str, object]] = {}
+    # Tenants touched across the suite, accumulated so the post-run purge
+    # covers every tenant any experiment actually wrote to.
+    all_tenants: list[str] = []
     for name in _ALL_EXPERIMENTS:
         if name in skip:
             typer.secho(f"skipping {name}", fg=typer.colors.YELLOW, err=True)
@@ -278,12 +288,20 @@ def run_all(
                 fg=typer.colors.YELLOW,
                 err=True,
             )
+        # The tenants this experiment will actually write to — including
+        # the seed-synthesised IDs used in the default mode. Tracked here
+        # so the post-run purge covers them (cfg.tenant_ids is empty in
+        # that mode, which is what made cleanup a silent no-op before).
+        exp_tenants = module.tenant_ids_for(cfg)
+        for t in exp_tenants:
+            if t not in all_tenants:
+                all_tenants.append(t)
         # Pre-clean so each experiment runs against a pristine tenant.
         # Reused tenants accumulate state that trips MemClaw's dedup gate
         # (409 near-duplicate), which is exactly what corrupted earlier
         # runs. Purging first makes every experiment reproducible.
         if cleanup:
-            cleared = asyncio.run(_purge_tenants(cfg))
+            cleared = asyncio.run(_purge_tenants(cfg, exp_tenants))
             if cleared:
                 typer.secho(
                     f"  cleaned {sum(cleared.values())} memories before {name}",
@@ -297,14 +315,24 @@ def run_all(
             logging.exception("experiment %s failed", name)
             summary[name] = {"status": "error", "error": str(e)}
 
-    # Post-clean so the tenant is left empty for the next run / other users.
+    # Post-clean so the tenants are left empty for the next run / other
+    # users. Purge every tenant the suite actually touched.
     if cleanup:
         cfg_final = _resolve_config(None, seed, label)
-        cleared = asyncio.run(_purge_tenants(cfg_final))
-        typer.secho(
-            f"\ncleanup: purged {sum(cleared.values())} memories after the suite",
-            fg=typer.colors.BLUE,
-        )
+        cleared = asyncio.run(_purge_tenants(cfg_final, all_tenants))
+        if cleared:
+            typer.secho(
+                f"\ncleanup: purged {sum(cleared.values())} memories across "
+                f"{len(cleared)} tenant(s) after the suite",
+                fg=typer.colors.BLUE,
+            )
+        else:
+            typer.secho(
+                "\ncleanup: nothing to purge after the suite "
+                "(no tenants resolved — check seed/config)",
+                fg=typer.colors.YELLOW,
+                err=True,
+            )
 
     typer.echo("\n=== run all — per-experiment outcome ===")
     typer.echo(json.dumps(summary, indent=2, default=str))
@@ -353,7 +381,7 @@ def cleanup(
         typer.confirm(
             f"Soft-delete ALL memories in tenant(s): {target}?", abort=True
         )
-    cleared = asyncio.run(_purge_tenants(cfg))
+    cleared = asyncio.run(_purge_tenants(cfg, cfg.tenant_ids))
     typer.echo(json.dumps({"purged": cleared, "total": sum(cleared.values())}, indent=2))
     typer.secho(
         f"Purged {sum(cleared.values())} memories across {len(cleared)} tenant(s).",
@@ -391,12 +419,17 @@ def plot_latest(
     ),
 ) -> None:
     """Re-render plots from the most recent run's events.jsonl."""
+    from argusfleet.harness.runner import latest_run_dir
+
     cfg = load_config(overrides={"output_dir": output_dir} if output_dir else None)
     runs_dir = Path(cfg.output_dir) / "runs"
     if not runs_dir.exists():
         typer.secho(f"no runs found under {runs_dir}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=2)
-    latest = max(runs_dir.iterdir(), key=lambda p: p.stat().st_mtime, default=None)
+    # Select by run_start event ts (shared authority with report.py), not
+    # filesystem mtime — re-materialising figures bumps mtime and would
+    # otherwise reorder runs.
+    latest = latest_run_dir(runs_dir)
     if latest is None:
         typer.secho(f"no runs found under {runs_dir}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=2)

@@ -23,8 +23,13 @@ plots[provenance]="completeness_by_depth.png fetch_latency.png"
 plots[propagation]="time_to_visibility.png visibility_by_relation.png"
 
 for exp in leakage contradiction provenance propagation; do
-    latest="$(find "$runs_dir" -maxdepth 1 -type d -name "*-${exp}-*" -printf '%T@ %p\n' \
-        | sort -nr | head -n1 | cut -d' ' -f2-)"
+    # Order by the UTC stamp embedded in the run-dir name (make_run_id),
+    # which equals the run_start event ts — NOT filesystem mtime, which
+    # `plot latest` bumps when it re-materialises figures. Keeps this
+    # script, `plot latest`, and the report table on one authority.
+    latest_name="$(find "$runs_dir" -maxdepth 1 -type d -name "*-${exp}-*" -printf '%f\n' \
+        | sort -r | head -n1)"
+    latest="${latest_name:+$runs_dir/$latest_name}"
     if [[ -z "$latest" ]]; then
         echo "WARN: no run found for $exp" >&2
         continue

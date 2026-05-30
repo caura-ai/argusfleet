@@ -16,6 +16,8 @@ matplotlib.use("Agg")  # headless
 import matplotlib.pyplot as plt  # noqa: E402
 import pandas as pd  # noqa: E402
 
+from argusfleet.harness.metrics import wilson_ci, wilson_yerr  # noqa: E402
+
 
 def plot_leakage_rate(
     df: pd.DataFrame,
@@ -102,13 +104,22 @@ def plot_leakage_by_axis(
     ]
     leak_rates = [(lk / ld if ld else 0.0) for _, lk, ld, _, _ in axes]
     miss_rates = [(ms / md if md else 0.0) for _, _, _, ms, md in axes]
-    ymax = max(0.1, max(leak_rates + miss_rates) * 1.2 + 0.01)
+
+    # 95% Wilson intervals → asymmetric error bars. Small-n proportions
+    # like 0/80 look like certainties without them.
+    leak_ci = [wilson_ci(lk, ld) for _, lk, ld, _, _ in axes]
+    miss_ci = [wilson_ci(ms, md) for _, _, _, ms, md in axes]
+    leak_yerr = wilson_yerr(leak_rates, leak_ci)
+    miss_yerr = wilson_yerr(miss_rates, miss_ci)
+    ymax = max(0.1, max(hi for _, hi in leak_ci + miss_ci) * 1.2 + 0.01)
 
     fig, ax = plt.subplots(figsize=(7, 4.5))
     x = list(range(len(axes)))
     width = 0.4
-    ax.bar([i - width / 2 for i in x], leak_rates, width=width, label="leak_rate")
-    ax.bar([i + width / 2 for i in x], miss_rates, width=width, label="miss_rate")
+    ax.bar([i - width / 2 for i in x], leak_rates, width=width, label="leak_rate",
+           yerr=leak_yerr, capsize=4, error_kw={"elinewidth": 1, "alpha": 0.8})
+    ax.bar([i + width / 2 for i in x], miss_rates, width=width, label="miss_rate",
+           yerr=miss_yerr, capsize=4, error_kw={"elinewidth": 1, "alpha": 0.8})
     ax.set_xticks(x, [a[0] for a in axes])
     ax.set_ylabel("Rate")
     ax.set_xlabel("measurement axis")
@@ -116,8 +127,11 @@ def plot_leakage_by_axis(
     ax.set_title(title)
     ax.legend(loc="upper right")
     for i, (_, lk, ld, ms, md) in enumerate(axes):
-        ax.text(i - width / 2, leak_rates[i], f"{lk}/{ld}", ha="center", va="bottom", fontsize=8)
-        ax.text(i + width / 2, miss_rates[i], f"{ms}/{md}", ha="center", va="bottom", fontsize=8)
+        # Lift each count label above its upper Wilson cap to avoid collision.
+        ax.text(i - width / 2, leak_rates[i] + leak_yerr[1][i], f"{lk}/{ld}",
+                ha="center", va="bottom", fontsize=8)
+        ax.text(i + width / 2, miss_rates[i] + miss_yerr[1][i], f"{ms}/{md}",
+                ha="center", va="bottom", fontsize=8)
     fig.tight_layout()
     fig.savefig(out_path, dpi=150)
     plt.close(fig)

@@ -57,6 +57,8 @@ from argusfleet.harness.metrics import (
     events_to_frame,
     read_jsonl,
     summarize_latency,
+    wilson_ci,
+    wilson_yerr,
     write_csv,
 )
 from argusfleet.harness.plots import plot_latency_hist
@@ -87,17 +89,25 @@ class _PropagationPlan:
     fact_contents: list[str]
 
 
+def tenant_ids_for(cfg: HarnessConfig) -> list[str]:
+    """Tenant this experiment will write to (single source of truth for
+    plan-building and ``run all`` cleanup; see leakage.tenant_ids_for)."""
+    exp = cfg.experiment or {}
+    tenant_id = (
+        (cfg.tenant_ids[0] if cfg.tenant_ids else None)
+        or exp.get("tenant_id")
+        or f"mc_prop_{cfg.seed}"
+    )
+    return [tenant_id]
+
+
 def _build_plan(cfg: HarnessConfig, *, nonce: str) -> _PropagationPlan:
     rng = random.Random(cfg.seed)
     exp = cfg.experiment or {}
     n_facts: int = int(exp.get("n_facts", 8))
     n_fleet_readers: int = int(exp.get("n_fleet_readers", 3))
     n_foreign_readers: int = int(exp.get("n_foreign_readers", 2))
-    tenant_id: str = (
-        (cfg.tenant_ids[0] if cfg.tenant_ids else None)
-        or exp.get("tenant_id")
-        or f"mc_prop_{cfg.seed}"
-    )
+    tenant_id: str = tenant_ids_for(cfg)[0]
     fleet_id: str = exp.get("fleet_id") or "fleet_prop_home"
     foreign_fleet_id: str = exp.get("foreign_fleet_id") or "fleet_prop_foreign"
 
@@ -239,7 +249,16 @@ async def _poll_visibility(
     timeout_ms: float,
     poll_interval_ms: float,
 ) -> dict[str, Any]:
-    """Poll search until the canary shows up or the timeout expires."""
+    """Poll search until the canary shows up or the timeout expires.
+
+    Cross-fleet readers do a *single* attempt (no polling): cross-fleet
+    isolation is a query-time ACL decision, not an eventual-consistency
+    race, so one search after the write phase has completed is sufficient
+    and any hit is a leak. Fleet siblings poll until the fact surfaces or
+    ``timeout_ms`` elapses, since their visibility genuinely is gated by
+    asynchronous enrichment lag.
+    """
+    single_attempt = reader_relation == "cross_fleet"
     deadline = time.perf_counter() + (timeout_ms / 1000.0)
     poll_count = 0
     saw = False
@@ -273,7 +292,7 @@ async def _poll_visibility(
         except MemClawError as e:
             last_status = e.status_code
             last_trace = e.trace_id
-        if time.perf_counter() >= deadline:
+        if single_attempt or time.perf_counter() >= deadline:
             break
         await asyncio.sleep(poll_interval_ms / 1000.0)
 
@@ -483,7 +502,9 @@ async def run(
             sink.write("run_end", {"run_id": run_id})
 
     await run_with_client(cfg, client=client, body=_execute)
-    return _materialize_outputs(run_dir, events_path)
+    result = _materialize_outputs(run_dir, events_path)
+    result["tenant_ids"] = tenant_ids_for(cfg)
+    return result
 
 
 # ---------------------------------------------------------------------- #
@@ -515,6 +536,8 @@ def _materialize_outputs(run_dir: Path, events_path: Path) -> dict[str, Any]:
             .reset_index()
         )
         by_rel["visibility_rate"] = by_rel["visible"] / by_rel["n"].clip(lower=1)
+        _ci = [wilson_ci(int(r.visible), int(r.n)) for r in by_rel.itertuples()]
+        vis_yerr = wilson_yerr(by_rel["visibility_rate"].tolist(), _ci)
         bar_chart_from_frame(
             by_rel,
             x="reader_relation",
@@ -524,6 +547,7 @@ def _materialize_outputs(run_dir: Path, events_path: Path) -> dict[str, Any]:
             ylabel="Visibility rate",
             ymax=1.05,
             out_path=visibility_plot,
+            yerr=vis_yerr,
         )
 
         fleet_only = probes[probes["reader_relation"] == "fleet_sibling"]
@@ -568,11 +592,27 @@ def _materialize_outputs(run_dir: Path, events_path: Path) -> dict[str, Any]:
 
     transfer_rate = 0.0
     redistribute_count = 0
+    transfer_skipped = 0
     if not redistributes.empty and "ownership_transferred" in redistributes.columns:
         redistribute_count = int(len(redistributes))
-        transferred = int(redistributes["ownership_transferred"].sum())
-        transfer_rate = transferred / redistribute_count if redistribute_count else 0.0
+        # Rows where the redistribute call itself didn't succeed — a 403
+        # from the trust gate (requester < trust_level 3) or a missing
+        # memory_id — could not transfer ownership and are NOT transfer
+        # failures. Exclude them from the denominator and report them
+        # separately as ``ownership_transfer_skipped``, so an all-403 run
+        # (the typical trust-level-1 tenant) surfaces the skip instead of
+        # collapsing to a misleading 0% ownership_transfer_rate.
+        if "redistribute_ok" in redistributes.columns:
+            attempted = redistributes[redistributes["redistribute_ok"].fillna(False).astype(bool)]
+        else:
+            attempted = redistributes
+        n_attempted = int(len(attempted))
+        transfer_skipped = redistribute_count - n_attempted
+        transferred = int(attempted["ownership_transferred"].sum())
+        transfer_rate = transferred / n_attempted if n_attempted else 0.0
         summary_rows.append({"metric": "n_redistributes", "value": redistribute_count})
+        summary_rows.append({"metric": "n_redistributes_attempted", "value": n_attempted})
+        summary_rows.append({"metric": "ownership_transfer_skipped", "value": transfer_skipped})
         summary_rows.append({"metric": "ownership_transfer_rate", "value": transfer_rate})
 
     write_csv(pd.DataFrame(summary_rows), summary_csv)
@@ -589,5 +629,6 @@ def _materialize_outputs(run_dir: Path, events_path: Path) -> dict[str, Any]:
         "leak_rate": leak_rate,
         "n_missed_propagations": n_missed,
         "n_redistributes": redistribute_count,
+        "ownership_transfer_skipped": transfer_skipped,
         "ownership_transfer_rate": transfer_rate,
     }

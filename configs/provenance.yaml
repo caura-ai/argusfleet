@@ -7,7 +7,10 @@ seed: 42
 run_label: provenance
 
 experiment:
-  # 25 chains × 4 depth = 100 writes; one verification fetch per chain.
+  # 25 chains × 4 depth = 100 writes. Verification walks each chain back
+  # from the leaf, so it issues ≈chain_depth GET-by-id fetches per chain
+  # (~100 total) — NOT one per chain. (These are GET /memories/{id}, not
+  # /search, so the 100 req/min /search limit doesn't apply.)
   n_chains: 25
   # Depth of each derivation chain. Each chain produces ``chain_depth``
   # writes; the leaf's metadata.derived_from points back through every

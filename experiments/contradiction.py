@@ -103,16 +103,24 @@ class _ContradictionFact:
     scenario: str  # "sequential" | "concurrent"
 
 
+def tenant_ids_for(cfg: HarnessConfig) -> list[str]:
+    """Tenant this experiment will write to (single source of truth for
+    fact-building and ``run all`` cleanup; see leakage.tenant_ids_for)."""
+    exp = cfg.experiment or {}
+    tenant_id = (
+        (cfg.tenant_ids[0] if cfg.tenant_ids else None)
+        or exp.get("tenant_id")
+        or f"mc_ctr_{cfg.seed}"
+    )
+    return [tenant_id]
+
+
 def _build_facts(cfg: HarnessConfig, *, nonce: str) -> list[_ContradictionFact]:
     rng = random.Random(cfg.seed)
     exp = cfg.experiment or {}
     n_facts: int = int(exp.get("n_facts", 8))
     scenarios: list[str] = list(exp.get("scenarios", ["sequential", "concurrent"]))
-    tenant_id: str = (
-        (cfg.tenant_ids[0] if cfg.tenant_ids else None)
-        or exp.get("tenant_id")
-        or f"mc_ctr_{cfg.seed}"
-    )
+    tenant_id: str = tenant_ids_for(cfg)[0]
     fleet_id: str = exp.get("fleet_id") or "fleet_ctr"
 
     # Subject templates are paired with the RDF ``predicate`` the
@@ -575,7 +583,9 @@ async def run(
             sink.write("run_end", {"run_id": run_id})
 
     await run_with_client(cfg, client=client, body=_execute)
-    return _materialize_outputs(run_dir, events_path)
+    result = _materialize_outputs(run_dir, events_path)
+    result["tenant_ids"] = tenant_ids_for(cfg)
+    return result
 
 
 # ---------------------------------------------------------------------- #

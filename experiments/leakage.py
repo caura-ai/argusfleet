@@ -81,6 +81,22 @@ class _ScenarioPlan:
     tenant_ids: list[str] = field(default_factory=list)
 
 
+def tenant_ids_for(cfg: HarnessConfig) -> list[str]:
+    """Tenants this experiment will write to.
+
+    Single source of truth shared by plan-building and by ``run all``'s
+    cleanup, so the purge targets the tenants actually written — including
+    the seed-synthesised IDs used in the default (no ``MEMCLAW_TENANT_ID``)
+    mode, which would otherwise never be registered for cleanup.
+    """
+    exp = cfg.experiment or {}
+    override = list(cfg.tenant_ids) or list(exp.get("tenant_ids") or [])
+    if override:
+        return override
+    n_tenants = int(exp.get("n_tenants", 2))
+    return [f"mc_lkg_t{ti}_{cfg.seed}" for ti in range(n_tenants)]
+
+
 def _build_plan(cfg: HarnessConfig, *, nonce: str) -> _ScenarioPlan:
     """Generate a deterministic plan from the seed.
 
@@ -92,26 +108,21 @@ def _build_plan(cfg: HarnessConfig, *, nonce: str) -> _ScenarioPlan:
 
     rng = random.Random(cfg.seed)
     exp = cfg.experiment or {}
-    n_tenants: int = int(exp.get("n_tenants", 2))
     n_fleets_per_tenant: int = int(exp.get("n_fleets_per_tenant", 2))
     n_agents_per_fleet: int = int(exp.get("n_agents_per_fleet", 2))
 
-    # If the user supplied real tenant IDs (via MEMCLAW_TENANT_ID or the
-    # YAML), use those — synthesising IDs only works for admin keys that
-    # bypass enforce_tenant. Single-tenant mode is still useful: it
-    # exercises cross-fleet leakage even when cross-tenant isn't testable
-    # with the caller's credentials.
-    override_tenant_ids = list(cfg.tenant_ids) or list(exp.get("tenant_ids") or [])
-    if override_tenant_ids:
-        n_tenants = len(override_tenant_ids)
+    # Resolve the tenants to write to (real IDs from MEMCLAW_TENANT_ID /
+    # YAML if supplied, else seed-synthesised — see tenant_ids_for).
+    # Synthesising IDs only works for admin keys that bypass
+    # enforce_tenant; single-tenant mode still exercises cross-fleet
+    # leakage even when cross-tenant isn't testable with the caller's key.
+    resolved_tenants = tenant_ids_for(cfg)
+    n_tenants = len(resolved_tenants)
 
     agents: list[_SyntheticAgent] = []
     tenant_ids: list[str] = []
     for ti in range(n_tenants):
-        if override_tenant_ids:
-            tenant_id = override_tenant_ids[ti]
-        else:
-            tenant_id = f"mc_lkg_t{ti}_{cfg.seed}"
+        tenant_id = resolved_tenants[ti]
         tenant_ids.append(tenant_id)
         for fi in range(n_fleets_per_tenant):
             fleet_id = f"fleet_{ti}_{fi}"
@@ -492,7 +503,9 @@ async def run(
             sink.write("run_end", {"run_id": run_id})
 
     await run_with_client(cfg, client=client, body=_execute)
-    return _materialize_outputs(run_dir, events_path)
+    result = _materialize_outputs(run_dir, events_path)
+    result["tenant_ids"] = tenant_ids_for(cfg)
+    return result
 
 
 def _materialize_outputs(run_dir: Path, events_path: Path) -> dict[str, Any]:

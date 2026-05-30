@@ -15,7 +15,6 @@ reconstruction, and cross-agent propagation.
 | `contradiction` | Detection of conflicting writes over the same RDF triple | implemented |
 | `provenance` | End-to-end reconstruction of derivation chains | implemented |
 | `propagation` | Fleet-sibling visibility + cross-fleet isolation + redistribute | implemented |
-| `long-context-vs-memory` | (not yet) | stubbed |
 | `scale` | (not yet) | stubbed |
 
 ## Quick start
@@ -118,7 +117,7 @@ the leakage experiment only exercises within-tenant scope enforcement.
 | Source | Precedence | Notes |
 |---|---|---|
 | CLI flags (`--seed`, `--label`) | highest | always win |
-| Env vars | high | `MEMCLAW_API_KEY`, `MEMCLAW_BASE_URL`, `MEMCLAW_TENANT_ID`, `AGENTFLEETMEM_*` |
+| Env vars | high | `MEMCLAW_API_KEY`, `MEMCLAW_BASE_URL`, `MEMCLAW_TENANT_ID`, `ARGUSFLEET_*` |
 | YAML config | low | `configs/<experiment>.yaml`, override with `--config` |
 | `HarnessConfig` defaults | lowest | sensible production-safe values |
 

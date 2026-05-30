@@ -34,6 +34,23 @@ def wilson_ci(successes: int, trials: int, *, z: float = 1.96) -> tuple[float, f
     return (lo, hi)
 
 
+def wilson_yerr(
+    values: list[float],
+    cis: list[tuple[float, float]],
+) -> list[list[float]]:
+    """Build a matplotlib ``yerr`` ``[lower, upper]`` (shape ``(2, N)``) of
+    non-negative error magnitudes from point ``values`` and their
+    ``(lo, hi)`` intervals.
+
+    Clamps at ``0`` so floating-point artefacts (e.g. ``hi - value`` landing
+    at ``-1e-16`` when both equal ``1.0``) don't trip matplotlib's
+    "negative error magnitude" check.
+    """
+    lower = [max(0.0, v - lo) for v, (lo, _hi) in zip(values, cis)]
+    upper = [max(0.0, hi - v) for v, (_lo, hi) in zip(values, cis)]
+    return [lower, upper]
+
+
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     with open(path, encoding="utf-8") as fh:

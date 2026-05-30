@@ -56,6 +56,8 @@ from argusfleet.harness.metrics import (
     events_to_frame,
     read_jsonl,
     summarize_latency,
+    wilson_ci,
+    wilson_yerr,
     write_csv,
 )
 from argusfleet.harness.plots import plot_latency_hist
@@ -99,16 +101,24 @@ class _Chain:
     steps: list[_ChainStep] = field(default_factory=list)
 
 
+def tenant_ids_for(cfg: HarnessConfig) -> list[str]:
+    """Tenant this experiment will write to (single source of truth for
+    chain-building and ``run all`` cleanup; see leakage.tenant_ids_for)."""
+    exp = cfg.experiment or {}
+    tenant_id = (
+        (cfg.tenant_ids[0] if cfg.tenant_ids else None)
+        or exp.get("tenant_id")
+        or f"mc_prv_{cfg.seed}"
+    )
+    return [tenant_id]
+
+
 def _build_chains(cfg: HarnessConfig, *, nonce: str) -> list[_Chain]:
     rng = random.Random(cfg.seed)
     exp = cfg.experiment or {}
     n_chains: int = int(exp.get("n_chains", 6))
     depth: int = int(exp.get("chain_depth", 4))
-    tenant_id: str = (
-        (cfg.tenant_ids[0] if cfg.tenant_ids else None)
-        or exp.get("tenant_id")
-        or f"mc_prv_{cfg.seed}"
-    )
+    tenant_id: str = tenant_ids_for(cfg)[0]
     fleet_id: str = exp.get("fleet_id") or "fleet_prv"
 
     if depth < 2:
@@ -411,7 +421,9 @@ async def run(
             sink.write("run_end", {"run_id": run_id})
 
     await run_with_client(cfg, client=client, body=_execute)
-    return _materialize_outputs(run_dir, events_path)
+    result = _materialize_outputs(run_dir, events_path)
+    result["tenant_ids"] = tenant_ids_for(cfg)
+    return result
 
 
 # ---------------------------------------------------------------------- #
@@ -448,6 +460,8 @@ def _materialize_outputs(run_dir: Path, events_path: Path) -> dict[str, Any]:
             .reset_index()
         )
         by_depth["completeness_rate"] = by_depth["complete"] / by_depth["n"].clip(lower=1)
+        _ci = [wilson_ci(int(r.complete), int(r.n)) for r in by_depth.itertuples()]
+        comp_yerr = wilson_yerr(by_depth["completeness_rate"].tolist(), _ci)
         bar_chart_from_frame(
             by_depth,
             x="depth_planned",
@@ -456,6 +470,7 @@ def _materialize_outputs(run_dir: Path, events_path: Path) -> dict[str, Any]:
             title="Provenance completeness by planned chain depth",
             ylabel="Completeness rate",
             out_path=completeness_plot,
+            yerr=comp_yerr,
         )
 
     if not fetches.empty and "fetch_latency_ms" in fetches.columns:

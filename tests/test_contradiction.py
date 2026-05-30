@@ -96,14 +96,20 @@ def _fake_server() -> respx.Router:
                 else None
             ),
         }
-        # Persist for GET-by-id re-fetch. Detection is async/post-commit:
-        # supersedes_id is NOT in the synchronous response a real server
-        # returns, so the second write flips the prior row to ``outdated``
-        # and the harness reads the supersession back via GET.
+        # Persist the FULL record (with supersession) for GET-by-id
+        # re-fetch, and flip the prior row to ``outdated``. Detection is
+        # async/post-commit on a real server: supersedes_id / superseded_by
+        # are NEVER present in the synchronous write response — the harness
+        # reads them back via GET-by-id after the settle window. Mirror that
+        # contract by stripping the supersession from the 201 body, so the
+        # detection signal flows only through the production-realistic path.
         rows_by_id[new_id] = dict(payload)
         if prev and prev in rows_by_id:
             rows_by_id[prev]["status"] = "outdated"
-        return httpx.Response(201, json=payload)
+        response_payload = dict(payload)
+        response_payload["supersedes_id"] = None
+        response_payload["superseded_by"] = None
+        return httpx.Response(201, json=response_payload)
 
     def get_handler(request: httpx.Request) -> httpx.Response:
         mem_id = request.url.path.rsplit("/", 1)[-1]
@@ -169,8 +175,6 @@ async def test_contradiction_detection_rate_is_one_against_a_compliant_server(
     )
     with _fake_server():
         async with MemClawClient(cfg.base_url, api_key="k", max_retries=1) as client:
-            # Patch metadata.subject to match fact_id so the search-handler
-            # state machine keys match what the experiment looks up.
             result = await contradiction.run(cfg, client=client)
 
     # Three sequential fact-runs against a compliant server → every

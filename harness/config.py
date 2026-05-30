@@ -36,8 +36,10 @@ class HarnessConfig(BaseModel):
     max_retries: int = 3
     # Minimum gap between writes, enforced client-side by the write rate
     # limiter. MemClaw caps writes at 10/second/tenant (429); 125 ms → 8/s
-    # keeps the harness safely under that ceiling so bursts from
-    # ``max_in_flight`` > 1 don't abort provenance chains mid-write.
+    # keeps the harness best-effort under that ceiling for bursts from
+    # ``max_in_flight`` > 1. The cap is per-tenant and shared, so this is
+    # not a hard guarantee — a concurrent writer can still trip a 429,
+    # which the client retries with backoff (see MemClawClient._request).
     min_request_interval_ms: float = 125.0
     seed: int = 42
     output_dir: Path = Field(default_factory=_default_output_dir)

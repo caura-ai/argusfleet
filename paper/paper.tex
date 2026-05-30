@@ -368,7 +368,7 @@ ArgusFleet~\citep{argusfleet} is a Python 3.12 evaluation harness comprising fou
 Every workload is seeded. Plan structure (fleets, agents, fact subjects, chain shapes) is reproducible across runs sharing the same seed. Per-run content is salted with a run-unique nonce so that re-running against a stateful production service still produces semantically fresh writes rather than collisions on accumulated state. Each run materialises a uniquely-named output directory of the form \texttt{<UTC-timestamp>-<experiment>-seed<N>/}.
 
 \paragraph{Async execution.}
-The client is built on \texttt{httpx} and \texttt{tenacity} with exponential backoff for transient transport errors and 5xx responses; 4xx responses are surfaced to the experiment unmodified, since 4xx is precisely the governance signal we are measuring. Concurrency caps are configured per experiment to remain below the per-tenant search rate limit (\(100\) req/min on \texttt{/search}).
+The client is built on \texttt{httpx} and \texttt{tenacity} with exponential backoff for transient transport errors, 5xx responses, and \(429\) rate-limit responses; other 4xx responses are surfaced to the experiment unmodified, since they are precisely the governance signal we are measuring. Concurrency caps are configured per experiment to remain below the per-tenant search rate limit (\(100\) req/min on \texttt{/search}).
 
 \paragraph{Domain model.}
 Per-probe and per-write events are appended to the JSONL trace as
@@ -441,37 +441,46 @@ We ran the four experiments against the production \texttt{memclaw.net} service 
 \begin{table*}[t]
 \centering
 \small
-\caption{Headline results across the four experiments at \(N = 100\) (planned probes/writes per experiment) on a freshly-provisioned MemClaw tenant. Leakage carries two signals per probe: the authoritative \emph{access} signal from \(\mathtt{GET}\)-by-id, and the secondary \emph{discovery} signal from semantic search. Counts in parentheses indicate the denominator the rate is over.}
+\caption{Headline results across the four experiments at \(N = 100\) (planned probes/writes per experiment) on a freshly-provisioned MemClaw tenant. Leakage carries two signals per probe: the authoritative \emph{access} signal from \(\mathtt{GET}\)-by-id, and the secondary \emph{discovery} signal from semantic search. Counts in parentheses indicate the denominator the rate is over. Each rate is followed by its \(95\%\) Wilson score interval.}
 \label{tab:headline}
 \begin{tabularx}{\linewidth}{lXr}
 \toprule
 Experiment & Metric & Value \\
 \midrule
-\multirow{6}{*}{Leakage}
+\multirow{10}{*}{Leakage}
   & probes total (planned / executed) & \(96\) / \(96\) \\
   & \textbf{access} leak rate, GET-by-id (\(n_{\text{deny}}=80\)) & \(\mathbf{1.000}\) \\
   & \quad 95\% Wilson CI & \([0.954, 1.000]\) \\
   & \textbf{access} miss rate, GET-by-id (\(n_{\text{allow}}=16\)) & \(0.000\) \\
+  & \quad 95\% Wilson CI & \([0.000, 0.194]\) \\
   & \textbf{search} leak rate, semantic search (\(n_{\text{deny}}=80\)) & \(0.425\) \\
+  & \quad 95\% Wilson CI & \([0.323, 0.534]\) \\
   & \textbf{search} miss rate (\(n_{\text{allow}}=16\)) & \(0.250\) \\
+  & \quad 95\% Wilson CI & \([0.102, 0.495]\) \\
   & access / search latency p50 & \(306\) / \(627\) ms \\
 \midrule
-\multirow{3}{*}{Provenance}
+\multirow{5}{*}{Provenance}
   & chain completeness (depth \(=4\), \(25\) chains) & \(\mathbf{1.000}\) \\
+  & \quad 95\% Wilson CI & \([0.867, 1.000]\) \\
   & writer-identity accuracy (all chains) & \(1.000\) \\
+  & \quad 95\% Wilson CI & \([0.867, 1.000]\) \\
   & per-hop fetch latency p50 / p95 / p99 & \(305\) / \(531\) / \(7{,}653\) ms \\
 \midrule
-\multirow{5}{*}{Propagation}
+\multirow{7}{*}{Propagation}
   & writes succeeded (planned \(=20\)) & \(20\) \\
   & visibility probes produced (planned \(=100\)) & \(100\) \\
   & fleet-sibling visibility (\(n_{\text{probes}}=60\)) & \(\mathbf{0.950}\) \\
+  & \quad 95\% Wilson CI & \([0.863, 0.983]\) \\
   & cross-fleet leak rate (\(n_{\text{probes}}=40\)) & \(\mathbf{0.000}\) \\
+  & \quad 95\% Wilson CI & \([0.000, 0.088]\) \\
   & time-to-visibility p50 / p95 & \(89.5\) / \(137.7\) s \\
 \midrule
-\multirow{5}{*}{Contradiction}
+\multirow{7}{*}{Contradiction}
   & writes succeeded (planned \(=200\)) & \(97\) \\
   & detection rate, all fact-runs (\(n=100\)) & \(0.490\) \\
+  & \quad 95\% Wilson CI & \([0.394, 0.587]\) \\
   & detection rate, both writes admitted (\(n=45\)) & \(\mathbf{1.000}\) \\
+  & \quad 95\% Wilson CI & \([0.921, 1.000]\) \\
   & write latency p50 / p95 (succeeded) & \(1{,}796\) / \(2{,}944\) ms \\
   & write latency p99 & \(3{,}882\) ms \\
 \bottomrule
@@ -544,11 +553,11 @@ Reaching complete reconstruction required pacing writes beneath MemClaw's per-te
 
 \subsection{Propagation}
 
-All \(20\) planned writes landed and all \(100\) downstream visibility probes fired. Fleet-sibling visibility was \(\mathbf{57/60 = 0.950}\) across intra-fleet probes, with zero cross-fleet leaks across \(\mathbf{40}\) foreign-fleet probes (\textsc{leak\_rate} \(= 0/40\)). The three misses are siblings whose canary never surfaced before the \(30\)-second poll deadline; every one of the \(57\) successful probes, by contrast, found the canary on its \emph{first} search (\(\mathtt{poll\_count}=1\)).
+All \(20\) planned writes landed and all \(100\) downstream visibility probes fired. Fleet-sibling visibility was \(\mathbf{57/60 = 0.950}\) (\(95\%\) Wilson score interval \([0.863, 0.983]\)) across intra-fleet probes, with zero cross-fleet leaks across \(\mathbf{40}\) foreign-fleet probes (\textsc{leak\_rate} \(= 0/40\), \(95\%\) Wilson CI \([0.000, 0.088]\)). The three misses are siblings whose canary never surfaced before the \(30\)-second poll deadline; every one of the \(57\) successful probes, by contrast, found the canary on its \emph{first} search (\(\mathtt{poll\_count}=1\)).
 
 Because successful probes hit on the first poll, the recorded time-to-visibility is the wall-clock from write completion to the moment the harness \emph{first looked} --- by which point the row was already searchable --- not the instant it became visible. It is therefore an \emph{upper bound} on the true write-to-visible latency, and is inflated by the sequential schedule that issues probes only after the write phase completes. Read that way, writes were already searchable by first poll \(38.6\)--\(155.0\) s after completion (p50 \(=89.5\) s, p95 \(=137.7\) s, p99 \(=154.9\) s); the real eventual-consistency window lies somewhere below those figures. The heavy upper tail still bounds the practical case: a downstream agent that polls within \(\sim\!30\) s of writing may not yet see the fact, which is what drives the three missed propagations.
 
-The underlying latency is dominated by asynchronous server-side enrichment (embedding generation and index installation). Each probe polls \texttt{/search} every \(500\) ms up to a \(30\)-second deadline; the \(57\) successful siblings cleared on the first poll and the \(3\) failures exhausted the deadline. Fig.~\ref{fig:prop-visibility} contrasts the intra-fleet and cross-fleet visibility rates side by side, and Fig.~\ref{fig:prop-tvisible} shows the full time-to-visibility distribution for the fleet-sibling axis.
+The underlying latency is dominated by asynchronous server-side enrichment (embedding generation and index installation). Fleet-sibling probes poll \texttt{/search} every \(500\) ms up to a \(30\)-second deadline (cross-fleet readers issue a single attempt); the \(57\) successful siblings cleared on the first poll and the \(3\) failures exhausted the deadline. Fig.~\ref{fig:prop-visibility} contrasts the intra-fleet and cross-fleet visibility rates side by side, and Fig.~\ref{fig:prop-tvisible} shows the full time-to-visibility distribution for the fleet-sibling axis.
 
 \begin{figure}[H]
 \centering
@@ -566,7 +575,7 @@ The underlying latency is dominated by asynchronous server-side enrichment (embe
 
 \subsection{Contradiction}
 
-Measured correctly, the contradiction primitive \emph{works}. Conditional on both contradictory writes being admitted, supersession was established in \textbf{every} case --- \(45/45 = 1.000\): a post-commit re-fetch found the newer row carrying \texttt{supersedes\_id} pointing at the older, and the older flipped to \texttt{outdated}, within \(\approx\!6\) s of the write. Overall \textsc{detection\_rate} is \(49/100 = 0.490\); the gap from \(1.0\) is entirely an \emph{admission} effect, not a detector failure (see below).
+Measured correctly, the contradiction primitive \emph{works}. Conditional on both contradictory writes being admitted, supersession was established in \textbf{every} case --- \(45/45 = 1.000\) (\(95\%\) Wilson CI \([0.921, 1.000]\)): a post-commit re-fetch found the newer row carrying \texttt{supersedes\_id} pointing at the older, and the older flipped to \texttt{outdated}, within \(\approx\!6\) s of the write. Overall \textsc{detection\_rate} is \(49/100 = 0.490\); the gap from \(1.0\) is entirely an \emph{admission} effect, not a detector failure (see below).
 
 Two corrections to an earlier, mis-measured version of this experiment underlie the result. First, detection is \emph{post-commit and asynchronous}: \texttt{supersedes\_id} is set after the write response returns, so reading it from the synchronous response (as we first did) reports a spurious \(0/100\). The re-fetch (\S\ref{sec:method}) is what surfaces the true outcome. Second, the structural detector only runs for predicates the server treats as single-valued; our earlier \texttt{deployment\_region} was not one, so the RDF path was silently skipped. Using a single-valued predicate (\texttt{region}, \texttt{runs\_on}, \dots) and re-fetching post-settle fixes both.
 

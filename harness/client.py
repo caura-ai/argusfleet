@@ -69,13 +69,20 @@ class _WriteRateLimiter:
 
     MemClaw rejects writes above ~10/second/tenant with HTTP 429
     ("Rate limit exceeded: 10 per 1 second"). With concurrent experiment
-    tasks (``max_in_flight`` > 1) a naive burst trips that ceiling and
-    aborts whole provenance chains. This limiter is shared across every
-    coroutine using one client: each acquirer is handed the next time
-    slot ``min_interval`` after the previous one, so the aggregate write
-    rate stays at ``1 / min_interval`` regardless of concurrency. The
-    lock is held only to assign a slot (cheap); the wait happens after
-    release so slot assignment never serialises the actual HTTP.
+    tasks (``max_in_flight`` > 1) a naive burst would trip that ceiling.
+    This limiter is shared across every coroutine using one client: each
+    acquirer is handed the next time slot ``min_interval`` after the
+    previous one, so the aggregate write rate stays at ``1 / min_interval``
+    regardless of concurrency. The lock is held only to assign a slot
+    (cheap); the wait happens after release so slot assignment never
+    serialises the actual HTTP.
+
+    This is best-effort, not a guarantee: the limiter is per-client while
+    the 10/s ceiling is per-tenant and shared, so another client/process
+    writing to the same tenant can still push the aggregate over.
+    ``_request`` therefore also retries 429 with backoff, so a transient
+    overshoot doesn't abort the caller (e.g. a provenance chain) — only a
+    *persistent* 429 (after retries) does.
     """
 
     def __init__(self, min_interval_s: float) -> None:
@@ -416,6 +423,17 @@ class MemClawClient:
             ):
                 with attempt:
                     resp = await _do()
+                    if resp.status_code == 429:
+                        # Per-tenant write ceiling (~10/s) tripped. The
+                        # client-side _WriteRateLimiter holds us under it
+                        # best-effort, but the ceiling is per-tenant and
+                        # shared, so a concurrent writer (another experiment
+                        # or process) can still push the aggregate over.
+                        # Treat 429 as retryable so a transient burst backs
+                        # off and retries instead of aborting the caller
+                        # (e.g. a provenance chain) mid-write. A persistent
+                        # 429 still surfaces after retries are exhausted.
+                        raise httpx.TransportError(f"server 429: {resp.text[:200]}")
                     if resp.status_code >= 500:
                         # Convert 5xx into a retryable transport-like error.
                         raise httpx.TransportError(
