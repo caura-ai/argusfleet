@@ -7,8 +7,8 @@ seed: 42
 run_label: contradiction
 
 experiment:
-  # 50 facts × 2 scenarios = 100 fact-runs; 100 fact-runs × 2 writes = 200 writes.
-  n_facts: 50
+  # 100 facts × 2 scenarios = 200 fact-runs; 200 fact-runs × 2 writes = 400 writes.
+  n_facts: 100
   # Both scenarios per fact. Trim to ["sequential"] or ["concurrent"]
   # to isolate one race regime.
   scenarios: ["sequential", "concurrent"]

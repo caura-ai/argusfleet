@@ -136,6 +136,10 @@ def _fast_cfg(tmp_config: HarnessConfig) -> HarnessConfig:
                 "poll_interval_ms": 10,
                 "redistribute_fraction": 1.0,
                 "max_in_flight": 4,
+                # Keep the window phase tiny + fast so tests don't sleep.
+                "n_window_facts": 2,
+                "window_poll_interval_ms": 10,
+                "window_timeout_ms": 300,
                 "tenant_id": "mc_t_test",
                 "fleet_id": "fleet_home",
                 "foreign_fleet_id": "fleet_other",
@@ -187,9 +191,10 @@ async def test_dropped_token_reports_missed_propagation(tmp_config: HarnessConfi
         }
         store[new_id] = record
         token = meta.get("canary")
-        if token and not drop_set:
-            # Drop the very first token we ever see — subsequent facts
-            # remain visible, so leak/visibility metrics are interpretable.
+        # Drop the first *rate-phase* token (the window phase writes first
+        # and its tokens carry phase="window"; dropping one of those would
+        # just stall the window poller and leave the rate metrics clean).
+        if token and not drop_set and meta.get("phase") != "window":
             drop_set.add(token)
         return httpx.Response(201, json=record)
 
