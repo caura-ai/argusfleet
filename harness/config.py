@@ -34,9 +34,13 @@ class HarnessConfig(BaseModel):
     api_key: str | None = None
     request_timeout_s: float = 30.0
     max_retries: int = 3
-    # Hard floor on the gap between writes (per memory of /search rate limit
-    # of 100 req/min/tenant; same order of magnitude on write).
-    min_request_interval_ms: float = 50.0
+    # Minimum gap between writes, enforced client-side by the write rate
+    # limiter. MemClaw caps writes at 10/second/tenant (429); 125 ms → 8/s
+    # keeps the harness best-effort under that ceiling for bursts from
+    # ``max_in_flight`` > 1. The cap is per-tenant and shared, so this is
+    # not a hard guarantee — a concurrent writer can still trip a 429,
+    # which the client retries with backoff (see MemClawClient._request).
+    min_request_interval_ms: float = 125.0
     seed: int = 42
     output_dir: Path = Field(default_factory=_default_output_dir)
     run_label: str | None = None
@@ -78,7 +82,10 @@ def load_config(
         or os.getenv("MEMCLAW_TENANT_IDS"),
     }
     for k, v in env_map.items():
-        if v is not None:
+        # Treat a set-but-empty env var (e.g. the shipped ``.env.example``'s
+        # ``MEMCLAW_API_KEY=``) as unset, so it doesn't clobber a YAML value
+        # with ``''``. ``os.getenv`` returns ``''`` (not ``None``) for these.
+        if v:
             data[k] = v
     if overrides:
         data.update(overrides)

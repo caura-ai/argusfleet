@@ -16,6 +16,7 @@ actual workload it's measuring.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -46,6 +47,49 @@ def make_run_dir(cfg: HarnessConfig, default_label: str) -> tuple[str, Path, Pat
     return run_id, run_dir, events_path
 
 
+def run_start_ts(run_dir: Path) -> str | None:
+    """Return the ISO ``ts`` of the run's ``run_start`` event, or ``None``.
+
+    This is the logical run clock written at launch — the single authority
+    for "which run is latest", shared with ``report.py``'s aggregator.
+    Prefer it over filesystem mtime: re-materialising plots (``plot
+    latest``) rewrites a run dir's files and bumps its mtime, which would
+    otherwise reorder runs and let the report table and the paper-figure
+    script disagree about which run dir a result came from.
+    """
+    events = run_dir / "events.jsonl"
+    if not events.exists():
+        return None
+    try:
+        with open(events, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                rec = json.loads(line)
+                if rec.get("event") == "run_start":
+                    ts = rec.get("ts")
+                    return str(ts) if ts is not None else None
+    except (OSError, json.JSONDecodeError):
+        return None
+    return None
+
+
+def latest_run_dir(runs_dir: Path) -> Path | None:
+    """Most-recent run dir by ``run_start`` event ts (NOT filesystem mtime).
+
+    Falls back to the dir-name UTC stamp (``make_run_id`` embeds it, so
+    lexicographic name order == chronological) when a run has no readable
+    run_start event, and as the tiebreak between equal timestamps.
+    """
+    if not runs_dir.exists():
+        return None
+    candidates = [d for d in runs_dir.iterdir() if d.is_dir()]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda d: (run_start_ts(d) or "", d.name))
+
+
 async def run_with_client(
     cfg: HarnessConfig,
     *,
@@ -67,6 +111,7 @@ async def run_with_client(
         cfg.api_key,
         timeout_s=cfg.request_timeout_s,
         max_retries=cfg.max_retries,
+        min_write_interval_ms=cfg.min_request_interval_ms,
     ) as c:
         await body(c)
 

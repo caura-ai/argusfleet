@@ -1,30 +1,34 @@
-% Starter bibliography for "Governed Shared Memory for Multi-Agent LLM Systems".
-% Entries are placeholders — verify titles, venues, years, and pages before
-% submission. URLs should be replaced with persistent DOIs where available.
+% Bibliography for "Governed Shared Memory for Multi-Agent LLM Systems".
+% Venues, years, pages, and DOIs verified 2026-05-29. The long-context survey
+% author list (arXiv:2503.17407) is abbreviated with "and others".
 
 % ---------- Agent memory systems (single-agent, conversational) ----------
 
-@inproceedings{memgpt2023,
-  author    = {Charles Packer and Sarah Wooders and Kevin Lin and Vivian Fang and Shishir G. Patil and Ion Stoica and Joseph E. Gonzalez},
-  title     = {{MemGPT}: Towards {LLMs} as Operating Systems},
-  booktitle = {arXiv preprint},
-  year      = {2023},
-  eprint    = {2310.08560},
-  archivePrefix = {arXiv}
+@misc{memgpt2023,
+  author        = {Charles Packer and Sarah Wooders and Kevin Lin and Vivian Fang and Shishir G. Patil and Ion Stoica and Joseph E. Gonzalez},
+  title         = {{MemGPT}: Towards {LLMs} as Operating Systems},
+  year          = {2023},
+  eprint        = {2310.08560},
+  archivePrefix = {arXiv},
+  howpublished  = {arXiv:2310.08560}
 }
 
 @misc{mem0,
-  author = {{Mem0 contributors}},
-  title  = {{Mem0}: The Memory Layer for Personalized {AI}},
-  year   = {2024},
-  howpublished = {\url{https://github.com/mem0ai/mem0}}
+  author        = {Prateek Chhikara and Dev Khant and Saket Aryan and Taranjeet Singh and Deshraj Yadav},
+  title         = {{Mem0}: Building Production-Ready {AI} Agents with Scalable Long-Term Memory},
+  year          = {2025},
+  eprint        = {2504.19413},
+  archivePrefix = {arXiv},
+  howpublished  = {arXiv:2504.19413}
 }
 
 @misc{zep,
-  author = {{Getzep}},
-  title  = {{Zep}: Long-Term Memory for {AI} Assistants},
-  year   = {2024},
-  howpublished = {\url{https://github.com/getzep/zep}}
+  author        = {Preston Rasmussen and Pavlo Paliychuk and Travis Beauvais and Jack Ryan and Daniel Chalef},
+  title         = {{Zep}: A Temporal Knowledge Graph Architecture for Agent Memory},
+  year          = {2025},
+  eprint        = {2501.13956},
+  archivePrefix = {arXiv},
+  howpublished  = {arXiv:2501.13956}
 }
 
 @misc{langmem,
@@ -39,7 +43,8 @@
   title  = {{AutoGen}: Enabling Next-Gen {LLM} Applications via Multi-Agent Conversation Framework},
   year   = {2023},
   eprint = {2308.08155},
-  archivePrefix = {arXiv}
+  archivePrefix = {arXiv},
+  howpublished  = {arXiv:2308.08155}
 }
 
 % ---------- Retrieval-augmented generation and long context ----------
@@ -48,14 +53,18 @@
   author    = {Patrick Lewis and Ethan Perez and Aleksandra Piktus and Fabio Petroni and Vladimir Karpukhin and Naman Goyal and Heinrich K{\"u}ttler and Mike Lewis and Wen-tau Yih and Tim Rockt{\"a}schel and Sebastian Riedel and Douwe Kiela},
   title     = {Retrieval-Augmented Generation for Knowledge-Intensive {NLP} Tasks},
   booktitle = {Advances in Neural Information Processing Systems ({NeurIPS})},
-  year      = {2020}
+  year      = {2020},
+  eprint        = {2005.11401},
+  archivePrefix = {arXiv}
 }
 
 @misc{longcontext_survey,
-  author = {{Survey authors (placeholder)}},
-  title  = {A Survey on Long-Context Methods for Large Language Models},
-  year   = {2024},
-  note   = {Replace with a current long-context survey before submission.}
+  author        = {Jiaheng Liu and others},
+  title         = {A Comprehensive Survey on Long Context Language Modeling},
+  year          = {2025},
+  eprint        = {2503.17407},
+  archivePrefix = {arXiv},
+  howpublished  = {arXiv:2503.17407}
 }
 
 % ---------- Distributed systems and shared state (background) ----------
@@ -67,7 +76,8 @@
   volume  = {21},
   number  = {7},
   pages   = {558--565},
-  year    = {1978}
+  year    = {1978},
+  doi     = {10.1145/359545.359563}
 }
 
 @inproceedings{bayou1995,
@@ -75,14 +85,20 @@
   title     = {Managing Update Conflicts in {Bayou}, a Weakly Connected Replicated Storage System},
   booktitle = {{ACM} Symposium on Operating Systems Principles ({SOSP})},
   year      = {1995},
-  pages     = {172--182}
+  pages     = {172--182},
+  doi       = {10.1145/224056.224070}
 }
 
 @inproceedings{crdt2011,
   author    = {Marc Shapiro and Nuno Pregui{\c{c}}a and Carlos Baquero and Marek Zawirski},
   title     = {Conflict-Free Replicated Data Types},
   booktitle = {Symposium on Self-Stabilizing Systems ({SSS})},
-  year      = {2011}
+  series    = {Lecture Notes in Computer Science},
+  volume    = {6976},
+  publisher = {Springer},
+  pages     = {386--400},
+  year      = {2011},
+  doi       = {10.1007/978-3-642-24550-3_29}
 }
 
 @article{dynamo2007,
@@ -92,7 +108,8 @@
   volume  = {41},
   number  = {6},
   pages   = {205--220},
-  year    = {2007}
+  year    = {2007},
+  doi     = {10.1145/1294261.1294281}
 }
 
 @article{spanner2013,
@@ -102,7 +119,8 @@
   volume  = {31},
   number  = {3},
   pages   = {8:1--8:22},
-  year    = {2013}
+  year    = {2013},
+  doi     = {10.1145/2491245}
 }
 
 % ---------- Governance / policy / access control ----------
@@ -114,14 +132,18 @@
   volume  = {29},
   number  = {2},
   pages   = {38--47},
-  year    = {1996}
+  year    = {1996},
+  doi     = {10.1109/2.485845}
 }
 
-@misc{nist_attribute_based,
-  author = {Vincent C. Hu and others},
-  title  = {Guide to Attribute Based Access Control ({ABAC}) Definition and Considerations},
-  year   = {2014},
-  note   = {{NIST} Special Publication 800-162}
+@techreport{nist_attribute_based,
+  author      = {Vincent C. Hu and David Ferraiolo and Rick Kuhn and Adam Schnitzer and Kenneth Sandlin and Robert Miller and Karen Scarfone},
+  title       = {Guide to Attribute Based Access Control ({ABAC}) Definition and Considerations},
+  institution = {National Institute of Standards and Technology},
+  type        = {{NIST} Special Publication},
+  number      = {800-162},
+  year        = {2014},
+  doi         = {10.6028/NIST.SP.800-162}
 }
 
 % ---------- Reference implementation and harness ----------

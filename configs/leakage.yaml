@@ -8,13 +8,15 @@ seed: 42
 run_label: leakage
 
 experiment:
-  # Dimensions chosen so n_probes ≈ 100 in single-tenant mode:
-  #   agents = n_tenants × n_fleets × n_agents = 1 × 4 × 3 = 12
-  #   secrets = owners × 2_scopes = 4 × 2 = 8
-  #   probes  = agents × secrets = 96
+  # Dimensions chosen so n_probes ≈ 200 in single-tenant mode. The run's
+  # MEMCLAW_TENANT_ID pins one real tenant, so n_tenants is moot and the
+  # probe set is single-tenant:
+  #   agents  = n_fleets × n_agents = 4 × 6 = 24
+  #   secrets = owners × 2_scopes   = 4 × 2 = 8
+  #   probes  = agents × secrets    = 192
   n_tenants: 2
   n_fleets_per_tenant: 4
-  n_agents_per_fleet: 3
+  n_agents_per_fleet: 6
   # Pause between writing every secret and firing probes. memclaw.net
   # enriches/embeds asynchronously by default — probing too soon means
   # the canary isn't indexed yet and every probe returns empty. Bump up

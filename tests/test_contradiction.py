@@ -40,6 +40,9 @@ def _fake_server() -> respx.Router:
     # Map (entity_id, predicate) -> latest memory_id; the second write
     # against the same key gets supersedes_id pointing back.
     latest_by_key: dict[tuple[str, str], str] = {}
+    # Stored rows by id, so the experiment's post-commit GET-by-id
+    # re-fetch (detection is async) can read back supersedes_id / status.
+    rows_by_id: dict[str, dict] = {}
 
     def upsert_handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.read())
@@ -93,7 +96,27 @@ def _fake_server() -> respx.Router:
                 else None
             ),
         }
-        return httpx.Response(201, json=payload)
+        # Persist the FULL record (with supersession) for GET-by-id
+        # re-fetch, and flip the prior row to ``outdated``. Detection is
+        # async/post-commit on a real server: supersedes_id / superseded_by
+        # are NEVER present in the synchronous write response — the harness
+        # reads them back via GET-by-id after the settle window. Mirror that
+        # contract by stripping the supersession from the 201 body, so the
+        # detection signal flows only through the production-realistic path.
+        rows_by_id[new_id] = dict(payload)
+        if prev and prev in rows_by_id:
+            rows_by_id[prev]["status"] = "outdated"
+        response_payload = dict(payload)
+        response_payload["supersedes_id"] = None
+        response_payload["superseded_by"] = None
+        return httpx.Response(201, json=response_payload)
+
+    def get_handler(request: httpx.Request) -> httpx.Response:
+        mem_id = request.url.path.rsplit("/", 1)[-1]
+        row = rows_by_id.get(mem_id)
+        if row is None:
+            return httpx.Response(404, json={"detail": "Memory not found"})
+        return httpx.Response(200, json=row)
 
     def search_handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.read())
@@ -128,6 +151,7 @@ def _fake_server() -> respx.Router:
     router.post("/api/v1/entities/upsert").mock(side_effect=upsert_handler)
     router.post("/api/v1/memories").mock(side_effect=write_handler)
     router.post("/api/v1/search").mock(side_effect=search_handler)
+    router.get(url__regex=r".*/api/v1/memories/[0-9a-fA-F-]+(\?.*)?$").mock(side_effect=get_handler)
     return router
 
 
@@ -151,8 +175,6 @@ async def test_contradiction_detection_rate_is_one_against_a_compliant_server(
     )
     with _fake_server():
         async with MemClawClient(cfg.base_url, api_key="k", max_retries=1) as client:
-            # Patch metadata.subject to match fact_id so the search-handler
-            # state machine keys match what the experiment looks up.
             result = await contradiction.run(cfg, client=client)
 
     # Three sequential fact-runs against a compliant server → every
@@ -220,6 +242,24 @@ async def test_contradiction_no_detection_when_server_drops_supersedes(
         )
         router.post("/api/v1/search").mock(
             return_value=httpx.Response(200, json={"items": []})
+        )
+        # GET-by-id re-fetch (the detection signal) also shows no
+        # supersession and an active status — so detection stays 0.
+        router.get(url__regex=r".*/api/v1/memories/[0-9a-fA-F-]+(\?.*)?$").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "00000000-0000-0000-0000-000000000001",
+                    "tenant_id": "mc_t_test",
+                    "agent_id": "agent_ctr_a_0",
+                    "memory_type": "fact",
+                    "content": "stub",
+                    "metadata": {},
+                    "status": "active",
+                    "supersedes_id": None,
+                    "superseded_by": None,
+                },
+            )
         )
         async with MemClawClient(cfg.base_url, api_key="k", max_retries=1) as client:
             result = await contradiction.run(cfg, client=client)

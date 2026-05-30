@@ -30,7 +30,10 @@
 
 \begin{document}
 
-\begin{frame}{Governed Shared Memory for Multi-Agent LLM Systems}
+% [shrink] auto-scales the body if it's even marginally too tall, so the
+% bottom strip can never be clipped; with the trimmed table below the
+% needed shrink is ~0, so text stays full size.
+\begin{frame}[shrink]{Governed Shared Memory for Multi-Agent LLM Systems}
 
 \footnotesize
 
@@ -39,7 +42,7 @@ Yanki Margalit (Caura.ai) \,$\cdot$\,
 Nurit Cohen-Inger (Ben-Gurion University of the Negev)
 }
 
-\vspace{0.4em}
+\vspace{0.25em}
 
 \begin{columns}[T,onlytextwidth]
 
@@ -47,27 +50,28 @@ Nurit Cohen-Inger (Ben-Gurion University of the Negev)
 \begin{column}{0.48\textwidth}
 
 \textbf{Thesis.} AI memory is shifting from a context-window problem to
-a distributed-systems problem: governance, synchronization, temporal
-correctness, provenance, scoped access. We propose four primitives,
-instantiate them in \textbf{MemClaw} (\texttt{memclaw.net}) and evaluate
-via \textbf{ArgusFleet} --- 4 experiments $\to$ 5 metric axes against a
-live service. Failure modes: leakage, stale propagation, contradiction
-persistence, provenance collapse.
+a distributed-systems problem. We propose four governed-memory primitives,
+instantiate them in \textbf{MemClaw} (\texttt{memclaw.net}) and evaluate via
+\textbf{ArgusFleet} --- 4 experiments $\to$ 5 metric axes against a live
+service.
 
 \vspace{0.3em}
 
-\textbf{Three architectural findings}
+\textbf{Architectural findings}
 \begin{enumerate}\setlength\itemsep{0.1em}\setlength\parskip{0pt}\setlength\leftmargin{1em}
-  \item \textcolor{warn}{\textbf{Scope enforcement is bimodal.}}
-        Tenant uniformly; sub-tenant only on search, not on
-        \texttt{GET}-by-id --- tenant-scoped keys carry no agent identity.
-        A property of the auth model, not a server defect.
-  \item \textcolor{warn}{\textbf{Dedup precedes contradiction detection.}}
-        Embedding \texttt{409}s block detection even on a clean tenant.
-        Pipeline ordering should invert when an RDF triple is present.
+  \item \textcolor{bad}{\textbf{Scope enforcement is bimodal.}}
+        Tenant uniformly; sub-tenant not on \texttt{GET}-by-id --- a
+        \emph{genuine enforcement gap} (the handler discards even a
+        resolved agent identity).
+  \item \textcolor{warn}{\textbf{Dedup starves contradiction detection.}}
+        Synchronous embedding \texttt{409}s pre-empt the async detector.
+        Detector is sound (90/90 when both land); the \emph{ordering} defeats it.
   \item \textcolor{warn}{\textbf{Cross-agent propagation is privilege-gated.}}
         \texttt{redistribute} requires \texttt{trust\_level $\ge$ 3},
         conflating fleet-internal propagation with admin migration.
+  \item \textcolor{good}{\textbf{Consistency cost is at write time.}}
+        Strong-mode write$\to$visible is $\sim$0.8 s (synchronous); the
+        cost is write latency, not a read tail.
 \end{enumerate}
 
 \end{column}
@@ -75,7 +79,7 @@ persistence, provenance collapse.
 % =================== RIGHT COLUMN =====================================
 \begin{column}{0.50\textwidth}
 
-\textbf{Headline results} \hfill {\scriptsize $N=100$, clean tenant}
+\textbf{Headline results} \hfill {\scriptsize $N=200$, clean tenant}
 
 \vspace{0.3em}
 
@@ -85,35 +89,33 @@ persistence, provenance collapse.
 \toprule
 Primitive & Signal & Result \\
 \midrule
-\textbf{Leakage}       & access leak rate, GET-by-id           & \textcolor{warn}{\textbf{80 / 80}} \\
-                       & \quad 95\% Wilson CI                  & [0.954, 1.000] \\
-                       & search leak rate                      & 0.45 \\
-                       & access / search latency p50           & 296 / 487 ms \\
+\textbf{Leakage}       & access leak, GET-by-id ($n=164$)      & \textcolor{bad}{\textbf{164 / 164}} \\
+                       & search leak rate                      & 0.439 \\
 \midrule
-\textbf{Provenance}    & chain completeness, depth 4           & 0.56 \\
+\textbf{Provenance}    & chain completeness, depth 4           & \textcolor{good}{\textbf{1.00}} \\
                        & writer-identity accuracy              & \textcolor{good}{\textbf{1.00}} \\
-                       & per-hop fetch p50 / p95               & \textcolor{good}{\textbf{290 / 333 ms}} \\
 \midrule
-\textbf{Propagation}   & fleet visibility ($n=60$)             & \textcolor{good}{\textbf{1.00}} \\
-                       & cross-fleet leak ($n=40$)             & \textcolor{good}{\textbf{0.00}} \\
-                       & time-to-visibility p50 / p95          & 83 / 130 s \\
+\textbf{Propagation}   & fleet visibility ($n=120$)            & \textcolor{good}{\textbf{0.975}} \\
+                       & cross-fleet leak ($n=80$)             & \textcolor{good}{\textbf{0.00}} \\
+                       & write$\to$visible window p50          & \textcolor{good}{\textbf{0.83 s}} \\
 \midrule
-\textbf{Contradiction} & detection rate                        & \textcolor{bad}{\textbf{0 / 100}} \\
-                       & writes succeeded                      & 74 / 200 \\
-                       & write latency p50 / p95               & 2.0 / 3.7 s \\
+\textbf{Contradiction} & supersession, both admitted           & \textcolor{good}{\textbf{90 / 90}} \\
+                       & detection rate, overall               & \textcolor{warn}{0.49} \\
 \bottomrule
 \end{tabularx}
 }
 
-\vspace{0.5em}
+\vspace{0.4em}
 
 \textbf{Take-aways}
 \begin{itemize}\setlength\itemsep{0.05em}\setlength\parskip{0pt}\setlength\leftmargin{1em}
-  \item Within-tenant scope: \textcolor{warn}{asymmetric on GET vs search}.
-  \item Provenance: \textcolor{good}{sub-second}, \textcolor{good}{1.00 accuracy}.
-  \item Propagation: \textcolor{good}{0 leaks at $n=40$},
-        \textcolor{warn}{$\sim$80 s window}.
-  \item Contradiction null is \textcolor{warn}{architectural} --- intra-run dedup.
+  \item GET-by-id: \textcolor{bad}{164/164 cross-fleet leak} --- a real
+        enforcement gap, not an auth artifact.
+  \item Provenance: \textcolor{good}{sub-second}, \textcolor{good}{1.00 completeness + accuracy}.
+  \item Propagation: \textcolor{good}{0 leaks at $n=80$};
+        \textcolor{good}{$\sim$0.8 s window} (synchronous enrichment).
+  \item Contradiction: \textcolor{good}{sound when admitted (90/90)};
+        \textcolor{warn}{dedup gate starves it} (0.49 overall).
 \end{itemize}
 
 \end{column}
@@ -124,8 +126,8 @@ Primitive & Signal & Result \\
 \hrule height 0.4pt
 \vspace{0.15em}
 {\scriptsize\itshape
-\textbf{Limitations:} single tenant; tenant-scoped key (sub-tenant GET
-enforcement structurally untestable); $N=100$; no baseline. \hfill
+\textbf{Limitations:} single tenant; $N=200$; low-load window (write p99
+$\sim$19 s under load); self-eval; no baseline. Traces committed for replay. \hfill
 \texttt{memclaw.net} / \texttt{github.com/caura-ai/argusfleet}}
 
 \end{frame}

@@ -15,7 +15,6 @@ reconstruction, and cross-agent propagation.
 | `contradiction` | Detection of conflicting writes over the same RDF triple | implemented |
 | `provenance` | End-to-end reconstruction of derivation chains | implemented |
 | `propagation` | Fleet-sibling visibility + cross-fleet isolation + redistribute | implemented |
-| `long-context-vs-memory` | (not yet) | stubbed |
 | `scale` | (not yet) | stubbed |
 
 ## Quick start
@@ -50,8 +49,10 @@ single markdown summary under `outputs/reports/<UTC-ts>/`.
 ```bash
 python -m argusfleet run <leakage|contradiction|provenance|propagation|all>
 python -m argusfleet run all --seed 1337 --label baseline --skip propagation
+python -m argusfleet run all --no-cleanup    # leave written memories on the server
 python -m argusfleet report latest [--quiet] [--no-copy-plots]
 python -m argusfleet plot latest    # re-render plots from the latest JSONL
+python -m argusfleet cleanup [--yes]         # soft-delete every memory in the tenant(s)
 ```
 
 Common flags on `run`: `--seed N`, `--label tag`, `--config path.yaml`, `-v`.
@@ -81,7 +82,29 @@ The production service accumulates state across runs. For credible
 numbers, use a clean tenant. The harness salts per-run content with the
 run ID so re-runs against a stateful tenant still produce semantically
 fresh writes, but the embedding-similarity dedup detector may still
-reject writes that share topical structure with prior runs.
+reject writes that share topical structure with prior runs (HTTP `409
+near-duplicate`), which silently corrupts results — failed writes
+cascade into empty provenance chains, zero successful contradiction
+writes, and missing propagation probes.
+
+To guarantee a clean slate, `run all` purges every configured tenant
+**before each experiment and after the suite** by default (soft-delete,
+which releases the dedup gate since MemClaw's duplicate detectors filter
+`deleted_at IS NULL`). Pass `--no-cleanup` to disable, or run
+`python -m argusfleet cleanup` to purge manually between campaigns. The
+purge targets each tenant in `MEMCLAW_TENANT_ID` and requires a key with
+`write` capability scoped to that tenant (no elevated trust needed).
+
+### Agent-scoped GET-by-id probe
+
+`scripts/agent_scope_probe.py` provisions two agent-scoped credentials
+(`POST /api/v1/admin/agent-keys/provision`, `kind=agent_key`) at trust 1
+and 2 using the tenant key, confirms identity via `/whoami`, then fetches
+a cross-fleet row by id with each. It shows the `GET`-by-id enforcement
+gap is credential-independent (the handler checks only the tenant, so a
+trust-1 agent reads a cross-fleet row). Self-cleaning and re-runnable; the
+two agent keys persist (revoke them in the dashboard). See paper §8.1 /
+Table 3.
 
 ### Multi-tenant configuration
 
@@ -94,7 +117,7 @@ the leakage experiment only exercises within-tenant scope enforcement.
 | Source | Precedence | Notes |
 |---|---|---|
 | CLI flags (`--seed`, `--label`) | highest | always win |
-| Env vars | high | `MEMCLAW_API_KEY`, `MEMCLAW_BASE_URL`, `MEMCLAW_TENANT_ID`, `AGENTFLEETMEM_*` |
+| Env vars | high | `MEMCLAW_API_KEY`, `MEMCLAW_BASE_URL`, `MEMCLAW_TENANT_ID`, `ARGUSFLEET_*` |
 | YAML config | low | `configs/<experiment>.yaml`, override with `--config` |
 | `HarnessConfig` defaults | lowest | sensible production-safe values |
 

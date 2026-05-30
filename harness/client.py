@@ -11,6 +11,7 @@ the client minimal makes it easy to swap transports later.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 import uuid
@@ -63,6 +64,59 @@ class MemClawResponse:
 _RETRYABLE_EXC = (httpx.TransportError, httpx.ReadTimeout, httpx.ConnectTimeout)
 
 
+class _RetryableStatus(httpx.TransportError):
+    """A retryable HTTP status (429 / 5xx) tagged with its originating code.
+
+    Subclassing ``TransportError`` keeps it inside ``_RETRYABLE_EXC`` so
+    tenacity retries it. Carrying ``status_code`` lets the exhaustion handler
+    surface the real server status (e.g. 503) instead of a generic ``0``, so
+    a persistent server 5xx is distinguishable from a connection failure in
+    the JSONL artifacts.
+    """
+
+    def __init__(self, status_code: int, message: str) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class _WriteRateLimiter:
+    """Spaces write requests under MemClaw's per-tenant write ceiling.
+
+    MemClaw rejects writes above ~10/second/tenant with HTTP 429
+    ("Rate limit exceeded: 10 per 1 second"). With concurrent experiment
+    tasks (``max_in_flight`` > 1) a naive burst would trip that ceiling.
+    This limiter is shared across every coroutine using one client: each
+    acquirer is handed the next time slot ``min_interval`` after the
+    previous one, so the aggregate write rate stays at ``1 / min_interval``
+    regardless of concurrency. The lock is held only to assign a slot
+    (cheap); the wait happens after release so slot assignment never
+    serialises the actual HTTP.
+
+    This is best-effort, not a guarantee: the limiter is per-client while
+    the 10/s ceiling is per-tenant and shared, so another client/process
+    writing to the same tenant can still push the aggregate over.
+    ``_request`` therefore also retries 429 with backoff, so a transient
+    overshoot doesn't abort the caller (e.g. a provenance chain) — only a
+    *persistent* 429 (after retries) does.
+    """
+
+    def __init__(self, min_interval_s: float) -> None:
+        self._min_interval = max(0.0, min_interval_s)
+        self._lock = asyncio.Lock()
+        self._next_slot = 0.0
+
+    async def acquire(self) -> None:
+        if self._min_interval <= 0:
+            return
+        async with self._lock:
+            now = time.monotonic()
+            slot = max(now, self._next_slot)
+            self._next_slot = slot + self._min_interval
+            wait = slot - now
+        if wait > 0:
+            await asyncio.sleep(wait)
+
+
 class MemClawClient:
     """Async client for memclaw.net REST API (``/api/v1/...``).
 
@@ -85,11 +139,15 @@ class MemClawClient:
         *,
         timeout_s: float = 30.0,
         max_retries: int = 3,
+        min_write_interval_ms: float = 125.0,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/") + "/api/v1"
         self._api_key = api_key
         self._max_retries = max(1, max_retries)
+        # Throttle mutating calls under the server's 10-writes/s/tenant
+        # ceiling. 125 ms → 8/s, comfortably below 429 territory.
+        self._write_limiter = _WriteRateLimiter(min_write_interval_ms / 1000.0)
         self._owns_client = http_client is None
         self._client = http_client or httpx.AsyncClient(
             timeout=httpx.Timeout(timeout_s),
@@ -160,7 +218,9 @@ class MemClawClient:
         if idempotency_key:
             headers["Idempotency-Key"] = idempotency_key
 
-        return await self._request("POST", "/memories", json=body, extra_headers=headers)
+        return await self._request(
+            "POST", "/memories", json=body, extra_headers=headers, rate_limit=True
+        )
 
     async def search_memory(
         self,
@@ -258,7 +318,66 @@ class MemClawClient:
             body["fleet_id"] = fleet_id
         if attributes is not None:
             body["attributes"] = attributes
-        return await self._request("POST", "/entities/upsert", json=body)
+        return await self._request(
+            "POST", "/entities/upsert", json=body, rate_limit=True
+        )
+
+    async def delete_all_memories(
+        self,
+        *,
+        tenant_id: str,
+        fleet_id: str | None = None,
+        agent_id: str | None = None,
+        memory_type: str | None = None,
+        status: str | None = None,
+        exclude_ids: list[str] | None = None,
+        metadata_filter: dict[str, str] | None = None,
+    ) -> MemClawResponse:
+        """Soft-delete every matching memory in a tenant in one round-trip.
+
+        Maps to ``DELETE /api/v1/memories?tenant_id=...``. With no extra
+        filters this clears the whole tenant. Soft-delete sets
+        ``deleted_at``; the server's dedup detectors all filter
+        ``deleted_at IS NULL``, so a purge fully releases the
+        near-duplicate gate that otherwise 409s repeated experiment runs.
+
+        Requires a key with ``write`` capability scoped to ``tenant_id``
+        (no trust level needed). Returns the 204 envelope on success.
+        """
+        params: dict[str, Any] = {"tenant_id": tenant_id}
+        if fleet_id is not None:
+            params["fleet_id"] = fleet_id
+        if agent_id is not None:
+            params["agent_id"] = agent_id
+        if memory_type is not None:
+            params["memory_type"] = memory_type
+        if status is not None:
+            params["status"] = status
+        body: dict[str, Any] = {}
+        if exclude_ids:
+            body["exclude_ids"] = exclude_ids
+        if metadata_filter:
+            body["metadata_filter"] = metadata_filter
+        return await self._request(
+            "DELETE", "/memories", params=params, json=body or None
+        )
+
+    async def count_memories(
+        self,
+        *,
+        tenant_id: str,
+        include_deleted: bool = False,
+    ) -> MemClawResponse:
+        """Aggregate memory counts for a tenant via ``GET /memories/stats``.
+
+        Used to verify a purge landed (``total`` should drop to 0) without
+        paginating the full list.
+        """
+        params: dict[str, Any] = {
+            "tenant_id": tenant_id,
+            "include_deleted": str(include_deleted).lower(),
+        }
+        return await self._request("GET", "/memories/stats", params=params)
 
     async def propagate_memory(
         self,
@@ -294,6 +413,7 @@ class MemClawClient:
         json: Any = None,
         params: dict[str, Any] | None = None,
         extra_headers: dict[str, str] | None = None,
+        rate_limit: bool = False,
     ) -> MemClawResponse:
         url = f"{self._base_url}{path}"
         trace_id = uuid.uuid4().hex
@@ -304,14 +424,24 @@ class MemClawClient:
             headers.update(extra_headers)
 
         attempt_holder = {"n": 0}
+        # Stamp the start of the actual HTTP call so the reported latency
+        # excludes write-limiter spacing and tenacity backoff (which would
+        # otherwise inflate the headline write-latency metrics).
+        http_started = {"t": time.perf_counter()}
 
         async def _do() -> httpx.Response:
             attempt_holder["n"] += 1
+            # Re-acquire a write slot on *every* attempt: one logical write
+            # can re-fire its POST up to ``max_retries`` times under transient
+            # 429/5xx, and each fire is a real request that must count against
+            # the per-tenant ceiling the limiter exists to respect.
+            if rate_limit:
+                await self._write_limiter.acquire()
+            http_started["t"] = time.perf_counter()
             return await self._client.request(
                 method, url, json=json, params=params, headers=headers
             )
 
-        started = time.perf_counter()
         try:
             async for attempt in AsyncRetrying(
                 stop=stop_after_attempt(self._max_retries),
@@ -321,16 +451,33 @@ class MemClawClient:
             ):
                 with attempt:
                     resp = await _do()
+                    if resp.status_code == 429:
+                        # Per-tenant write ceiling (~10/s) tripped. The
+                        # client-side _WriteRateLimiter holds us under it
+                        # best-effort, but the ceiling is per-tenant and
+                        # shared, so a concurrent writer (another experiment
+                        # or process) can still push the aggregate over.
+                        # Treat 429 as retryable so a transient burst backs
+                        # off and retries instead of aborting the caller
+                        # (e.g. a provenance chain) mid-write. A persistent
+                        # 429 still surfaces after retries are exhausted.
+                        raise _RetryableStatus(429, f"server 429: {resp.text[:200]}")
                     if resp.status_code >= 500:
-                        # Convert 5xx into a retryable transport-like error.
-                        raise httpx.TransportError(
-                            f"server {resp.status_code}: {resp.text[:200]}"
+                        # Convert 5xx into a retryable transport-like error,
+                        # tagged so the real status survives retry exhaustion.
+                        raise _RetryableStatus(
+                            resp.status_code,
+                            f"server {resp.status_code}: {resp.text[:200]}",
                         )
         except _RETRYABLE_EXC as e:
-            elapsed = (time.perf_counter() - started) * 1000.0
-            raise MemClawError(0, f"transport failure: {e}", trace_id=trace_id) from e
+            # Preserve the upstream status when we have it (429/5xx via
+            # _RetryableStatus); a genuine connection failure has none → 0.
+            status = getattr(e, "status_code", 0)
+            raise MemClawError(
+                status, f"transport failure: {e}", trace_id=trace_id
+            ) from e
 
-        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        elapsed_ms = (time.perf_counter() - http_started["t"]) * 1000.0
         try:
             payload = resp.json() if resp.content else None
         except ValueError:

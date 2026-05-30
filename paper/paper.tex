@@ -60,7 +60,7 @@ Governed Shared Memory for Multi-Agent LLM Systems
 
   We introduce a systems architecture for governed shared memory in multi-agent LLM environments. We formalize the fleet-memory problem, identify four classes of fleet-memory failure modes, and propose architectural primitives for scoped retrieval, temporal contradiction resolution, provenance tracking, and policy-governed memory propagation. We present MemClaw, a reference implementation deployed in production at \texttt{memclaw.net}, and ArgusFleet, a reproducible evaluation harness that exercises each primitive against the live service.
 
-  Across 100 planned workload trials per primitive on a freshly-provisioned tenant, we observe sub-second provenance chain traversal (p50 \(\approx 290\) ms, p95 \(\approx 333\) ms at depth four), perfect intra-fleet propagation (\(60/60\)) with zero cross-fleet leakage (\(0/40\)) and an eventually-consistent visibility window of approximately \(83\) seconds (p50). We also surface three architectural findings about production memory infrastructure: scope enforcement is bimodal --- tenant-level isolation is enforced uniformly while sub-tenant scope is enforced only on the search path, not on direct \(\mathtt{GET}\)-by-id; embedding-similarity deduplication pre-empts contradiction detection even on a clean tenant where no historical near-duplicates exist; and cross-agent memory re-homing is gated behind elevated trust levels in a way that conflates fleet-internal propagation with administrative migration. Our results suggest that long-context retrieval alone is insufficient for production fleet-memory systems and that governed shared memory requires explicit systems-level abstractions beyond existing single-agent memory architectures.
+  We run ArgusFleet against MemClaw at \(N = 200\) planned trials per primitive on a freshly-provisioned tenant --- a measurement of a single production service, not a comparison against baselines --- and the negative results are as informative as the positive one. Provenance is the clean positive: all \(50/50\) depth-four chains reconstruct with correct writer identity at sub-second per-hop latency (p50 \(\approx 291\) ms). The other findings are cautionary. Scope enforcement is \emph{bimodal}: tenant isolation holds on every path, but sub-tenant (fleet/agent) scope is unenforced on direct \(\mathtt{GET}\)-by-id --- a gap we show is credential-independent, since even an agent-scoped key whose identity the gateway resolves reads a peer fleet's row at a trust level the documented ladder should deny. Contradiction handling is correct where it runs --- every contradictory pair that cleared the write gate was superseded (\(90/90\)) --- but a synchronous embedding-dedup gate \(409\)s near-identically phrased writes before the asynchronous detector sees them, holding the end-to-end detection rate to \(0.49\) and exposing a pipeline-ordering issue (synchronous dedup pre-commit vs.\ asynchronous contradiction post-commit). Cross-agent propagation is correct where measured (intra-fleet visibility \(117/120\), cross-fleet leakage \(0/80\)); measuring write-to-visibility with tight per-fact polling shows it is effectively immediate under strong write mode (p50 \(\approx 0.8\) s --- one search round-trip), revising the tens-of-seconds window a naive batched probe schedule reports and which we trace to a measurement artifact, and re-homing is privilege-gated in a way that conflates fleet-internal propagation with administrative migration. We conclude that long-context retrieval alone is insufficient for production fleet-memory systems and that governed shared memory requires explicit systems-level abstractions --- and that exercising them against a live service surfaces enforcement gaps and pipeline-ordering effects that a design-only treatment would miss.
   \end{abstract}
   \vspace{1em}
   \end{@twocolumnfalse}
@@ -76,9 +76,13 @@ and reads governed memory through MemClaw's REST API. MemClaw enforces
 four governance dimensions --- scope, time, provenance, and propagation
 --- that jointly characterise operational correctness in fleet-memory
 systems. The ArgusFleet evaluation harness (bottom) probes the same REST API
-surface with one experiment per dimension. The horizontal alignment
-between governance dimensions and ArgusFleet experiments reflects a 1:1
-mapping: each experiment measures the dimension directly above it.}
+surface with one experiment per dimension. The vertical alignment indicates
+which dimension each experiment \emph{probes}, not a claim of exhaustive
+coverage: each experiment targets its dimension directly, and \emph{stale
+propagation} (\S\ref{sec:failures}) is probed jointly --- by the contradiction
+experiment's supersession-resolution check (the superseded row flips to
+\texttt{outdated}) and the propagation experiment's visibility-latency
+measurement (\S\ref{sec:limitations}).}
 \label{fig:overview}
 \end{figure*}
 
@@ -99,7 +103,7 @@ This paper makes six contributions:
     \item We propose architectural primitives for governed shared memory: scoped retrieval, temporal contradiction resolution, provenance tracking, and policy-governed memory propagation.
     \item We present MemClaw, a reference implementation of these primitives deployed in production at \texttt{memclaw.net}.
     \item We introduce ArgusFleet, a reproducible, async, JSONL-traced evaluation harness that exercises the four governance failure modes of \S\ref{sec:failures} as four experiments against a live memory service. The harness reports five metric axes: four governance properties (one per failure mode) plus \emph{retrieval recall} as an orthogonal availability signal that shares its probe set with the leakage experiment.
-    \item We report empirical results from running ArgusFleet against MemClaw at \(N=100\) trials per experiment and surface three architectural findings: scope enforcement is bimodal between the access (\(\mathtt{GET}\)-by-id) and discovery (search) paths; embedding-similarity deduplication pre-empts contradiction detection on the write path; and cross-agent memory re-homing is gated behind elevated trust levels.
+    \item We report empirical results from running ArgusFleet against MemClaw at \(N=200\) trials per experiment and surface three architectural findings: scope enforcement is bimodal between the access (\(\mathtt{GET}\)-by-id) and discovery (search) paths; contradiction supersession is correct when both writes are admitted but a synchronous dedup gate pre-empts near-duplicate-phrased contradictory writes before the asynchronous detector runs; and cross-agent memory re-homing is gated behind elevated trust levels.
 \end{enumerate}
 
 \section{Background and Related Work}
@@ -117,6 +121,7 @@ A line of recent agent-memory architectures --- including MemGPT and its success
 Once memory is genuinely shared across agents, the operational concerns mirror those of traditional distributed systems: synchronisation, consistency, access governance, temporal ordering, event propagation, and auditability. Production AI memory systems therefore increasingly resemble distributed databases~\citep{dynamo2007, spanner2013}, event-sourcing and weakly-connected replicated stores~\citep{bayou1995, crdt2011}, synchronisation layers~\citep{lamport1978}, and governance middleware~\citep{rbac1996, nist_attribute_based} --- not the retrieval indexes from which the agent-memory line of work descended. This suggests that memory infrastructure may become a foundational systems layer for future AI architectures, and that the methods and primitives developed for distributed state are the right vocabulary for reasoning about it.
 
 \section{The Fleet-Memory Problem}
+\label{sec:problem}
 
 Modern AI deployments are increasingly composed not of a single assistant but of fleets of specialised agents operating over shared persistent state. A customer-support agent may update a user's billing record in a way that subsequently affects a planning agent's schedule, an analytics agent's dashboard, a workflow orchestrator's routing logic, and a downstream compliance system's audit trail. A research agent may surface a finding that synthesis agents, verification agents, reporting systems, and autonomous workflows all need to consume hours or days later. In these environments, memory is no longer ``conversation history''; it is shared operational state, and the correctness story it must support has more in common with shared-storage subsystems than with retrieval indexes.
 
@@ -215,6 +220,25 @@ In fleet-memory systems, retrieval correctness additionally depends on:
     \item provenance validity,
     \item and synchronization guarantees.
 \end{itemize}
+
+We make the authorization requirement precise, since it is the one the
+evaluation falsifies. Let \(\mathrm{auth}(a_j, s_i, G)\) denote the predicate
+``agent \(a_j\) is entitled, under governance \(G\), to view a memory carrying
+scope \(s_i\),'' where \(s_i\) decomposes into nested levels (agent
+\(\sqsubseteq\) fleet \(\sqsubseteq\) tenant; \S\ref{sec:impl}). A retrieval is
+\emph{scope-sound} when
+\[
+w_i \in r_j \;\Longrightarrow\; \mathrm{auth}(a_j, s_i, G).
+\tag{\textsc{Inv-Scope}}
+\]
+That is, no agent receives a memory its identity is not entitled to under the
+row's scope. \textsc{Inv-Scope} is the formal content of the unauthorized-leakage
+failure mode (\S\ref{sec:failures}): a leak is exactly a violation of it. A
+correct governed-memory implementation must evaluate the \emph{full} scope
+predicate on every retrieval path; as \S\ref{sec:results} shows, the
+\(\mathtt{GET}\)-by-id path evaluates only the tenant projection of \(s_i\) and so
+violates \textsc{Inv-Scope} for any fleet- or agent-scoped row --- the formalism
+predicts the bug the experiment measures.
 
 This distinction becomes critical once memory evolves from passive context into shared operational infrastructure.
 
@@ -325,7 +349,7 @@ We instantiate the architecture of \S5 in two artifacts: MemClaw, a multi-tenant
 
 \subsection{MemClaw}
 
-MemClaw~\citep{memclaw} provides governed shared memory as a managed REST service. Each memory object carries the fields required by the architecture: tenant and fleet identifiers, writing agent, content, optional RDF triple (\(\langle\) subject\_entity, predicate, object\_value \(\rangle\)), visibility scope, status, and supersession links. The wire format additionally exposes ingestion-side metadata (write mode, enrichment-pending flags) so a caller can reason about consistency at write time. Authentication is performed via a tenant-scoped API key (prefix \texttt{mc\_}) or an agent-scoped key (prefix \texttt{mca\_}), with the gateway enforcing tenant boundaries before request handlers execute.
+MemClaw~\citep{memclaw} provides governed shared memory as a managed REST service. Each memory object carries the fields required by the architecture: tenant and fleet identifiers, writing agent, content, optional RDF triple (\(\langle\) subject\_entity, predicate, object\_value \(\rangle\)), visibility scope, status, and supersession links. The wire format additionally exposes ingestion-side metadata (write mode, enrichment-pending flags) so a caller can reason about consistency at write time. Authentication uses an \texttt{mc\_}-prefixed API key; the credential's \emph{kind} (tenant-scoped vs.\ agent-scoped) is bound on the credential record, not encoded in the prefix. For an agent-scoped credential the gateway resolves the caller's agent identity and injects it (as \texttt{X-Agent-ID}) before request handlers execute --- a client-supplied \texttt{X-Agent-ID} is stripped --- while tenant boundaries are enforced on every path.
 
 The following operations are exercised in this paper:
 \begin{itemize}
@@ -338,13 +362,13 @@ The following operations are exercised in this paper:
 
 \subsection{ArgusFleet}
 
-ArgusFleet~\citep{argusfleet} is a Python 3.12 evaluation harness comprising four experiments, an async REST client, a typed domain model, structured event logging, and a reproducible reporting pipeline. It is open-source as the \texttt{argusfleet} package at \url{https://github.com/caura-ai/argusfleet}; we use the name ArgusFleet for the system throughout this paper. The harness produces JSONL event traces, CSV summaries, and Matplotlib figures from each run, all derived from the same canonical event stream so analysis can be re-executed without re-hitting the server.
+ArgusFleet~\citep{argusfleet} is a Python 3.12 evaluation harness comprising four experiments, an async REST client, a typed domain model, structured event logging, and a reproducible reporting pipeline. It is open-source as the \texttt{argusfleet} package at \url{https://github.com/caura-ai/argusfleet}; we use the name ArgusFleet for the system throughout this paper. The harness produces JSONL event traces, CSV summaries, and Matplotlib figures from each run, all derived from the same canonical event stream so analysis can be re-executed without re-hitting the server. The event traces backing every number in this paper --- including all four \(N{=}200\) contradiction runs and the \(N{=}100\) comparison (\S\ref{sec:results}) --- are committed under \texttt{traces/} in that repository (commit \texttt{2c55bb5}); each experiment's reported figures and \texttt{summary.csv} regenerate deterministically from its per-write \texttt{events.jsonl}.
 
 \paragraph{Determinism.}
 Every workload is seeded. Plan structure (fleets, agents, fact subjects, chain shapes) is reproducible across runs sharing the same seed. Per-run content is salted with a run-unique nonce so that re-running against a stateful production service still produces semantically fresh writes rather than collisions on accumulated state. Each run materialises a uniquely-named output directory of the form \texttt{<UTC-timestamp>-<experiment>-seed<N>/}.
 
 \paragraph{Async execution.}
-The client is built on \texttt{httpx} and \texttt{tenacity} with exponential backoff for transient transport errors and 5xx responses; 4xx responses are surfaced to the experiment unmodified, since 4xx is precisely the governance signal we are measuring. Concurrency caps are configured per experiment to remain below the per-tenant search rate limit (\(100\) req/min on \texttt{/search}).
+The client is built on \texttt{httpx} and \texttt{tenacity} with exponential backoff for transient transport errors, 5xx responses, and \(429\) rate-limit responses; other 4xx responses are surfaced to the experiment unmodified, since they are precisely the governance signal we are measuring. Concurrency caps are configured per experiment to remain below the per-tenant search rate limit (\(100\) req/min on \texttt{/search}).
 
 \paragraph{Domain model.}
 Per-probe and per-write events are appended to the JSONL trace as
@@ -364,7 +388,7 @@ We evaluate the four failure modes from \S4 with one experiment each. Every expe
 
 \subsection{Leakage Experiment}
 
-We instantiate \(F = 4\) fleets, each containing \(K = 3\) agents, in a single tenant. The first agent in each fleet (the \emph{owner}) writes two secrets: one with fleet scope, one with agent scope, each containing a unique canary token in metadata and substantively distinct prose in content. Every agent then probes every secret by issuing a search whose query is the secret's prose; the harness classifies each probe against ground truth (does this agent's tenant/fleet/agent identity entitle it to see this secret?) and labels the result.
+We instantiate \(F = 4\) fleets, each containing \(K = 6\) agents, in a single tenant. The first agent in each fleet (the \emph{owner}) writes two secrets: one with fleet scope, one with agent scope, each containing a unique canary token in metadata and substantively distinct prose in content. Every agent then probes every secret by issuing a search whose query is the secret's prose; the harness classifies each probe against ground truth (does this agent's tenant/fleet/agent identity entitle it to see this secret?) and labels the result.
 
 For each probe, we record two orthogonal failure signals:
 \begin{itemize}
@@ -372,22 +396,24 @@ For each probe, we record two orthogonal failure signals:
     \item \textbf{miss} --- the server failed to return a row the probe was entitled to see; this is an availability failure that reflects retrieval recall.
 \end{itemize}
 
-We report \(\textsc{leak\_rate} = n_{\text{leaks}} / n_{\text{expected-deny}}\) and \(\textsc{miss\_rate} = n_{\text{misses}} / n_{\text{expected-allow}}\). At the configured workload size we generate \(96\) probes spanning \(80\) expected-deny and \(16\) expected-allow.
+We report \(\textsc{leak\_rate} = n_{\text{leaks}} / n_{\text{expected-deny}}\) and \(\textsc{miss\_rate} = n_{\text{misses}} / n_{\text{expected-allow}}\). At the configured workload size we generate \(192\) probes spanning \(164\) expected-deny and \(28\) expected-allow.
+
+To separate an authentication-model effect from a genuine enforcement gap on the access path, we additionally run a focused \emph{agent-scoped} probe. Using the tenant key we self-provision two agent credentials (\texttt{POST /api/v1/admin/agent-keys/provision}, \(\mathtt{kind{=}agent\_key}\)) bound to the same fleet but different trust levels --- one at \(\text{trust}=1\) (write home fleet; below the cross-fleet-read rung) and one at \(\text{trust}=2\) (cross-fleet read). We confirm the gateway resolves each agent's identity via \texttt{GET /api/v1/whoami}, then \(\mathtt{GET}\) a row written under a \emph{different} fleet with each credential. Under the documented trust ladder (\(0\) read-only, \(1\) write-home-fleet, \(2\) cross-fleet-read, \(3\) cross-fleet-write), the trust-\(1\) cross-fleet read must be denied if sub-tenant scope is enforced on \(\mathtt{GET}\).
 
 \subsection{Contradiction Experiment}
 
-We construct \(50\) facts drawn from \(20\) distinct subject--predicate templates (e.g., \(\langle \text{billing-service-N}, \text{deployment\_region} \rangle\)). For each fact we run two scenarios: a \emph{sequential} writer pair separated by a small delay, and a \emph{concurrent} pair dispatched simultaneously. Within each pair, both writes share the same \texttt{subject\_entity\_id} and \texttt{predicate} but assert different \texttt{object\_value}. The RDF triple is what we expect to route the second write into the server's structural contradiction detector rather than into the embedding-similarity dedup gate.
+We construct \(100\) facts drawn from \(20\) distinct subject--predicate templates (e.g., \(\langle \text{billing-service-N}, \text{deployment\_region} \rangle\)). For each fact we run two scenarios: a \emph{sequential} writer pair separated by a small delay, and a \emph{concurrent} pair dispatched simultaneously. Within each pair, both writes share the same \texttt{subject\_entity\_id} and \texttt{predicate} but assert different \texttt{object\_value}. The RDF triple is what we expect to route the second write into the server's structural contradiction detector rather than into the embedding-similarity dedup gate.
 
 We report:
 \begin{itemize}
-    \item \textbf{detection\_rate} --- the fraction of fact-runs in which the second write returned \texttt{supersedes\_id} pointing at the first.
+    \item \textbf{detection\_rate} --- the fraction of fact-runs in which, after a settle window, a \(\mathtt{GET}\)-by-id \emph{re-fetch} of the two rows shows a supersession edge (\texttt{supersedes\_id}) or the older row flipped to a non-active status. The re-fetch is essential: contradiction detection runs \emph{post-commit and asynchronously}, so \texttt{supersedes\_id} is never present in the synchronous write response (reading it there --- as an earlier version did --- yields a spurious \(0\)). The predicate must also be one the server treats as single-valued, or its structural detector is skipped.
     \item \textbf{stale\_read\_rate} --- the fraction of fact-runs in which a fresh \texttt{status\_filter="active"} search returned more than one row carrying the fact identifier.
     \item \textbf{write\_latency} percentiles, split by whether the write triggered a contradiction.
 \end{itemize}
 
 \subsection{Provenance Experiment}
 
-We construct \(25\) derivation chains of depth \(4\) (\(100\) total writes). Each chain corresponds to a synthetic incident narrative drawn from \(25\) operational topics (e.g., \emph{checkout error rate spike}, \emph{Kafka consumer rebalance loop}). The four steps in each chain correspond to \emph{observation}, \emph{hypothesis}, \emph{mitigation}, and \emph{verification}. Each step writes a memory with \texttt{metadata.derived\_from} encoding the parent identifier. After all writes settle, the harness fetches the leaf and walks the chain back to the root, grading three signals:
+We construct \(50\) derivation chains of depth \(4\) (\(200\) total writes). Each chain corresponds to a synthetic incident narrative drawn from a pool of \(25\) operational topics (cycled, with a per-chain nonce keeping content distinct) (e.g., \emph{checkout error rate spike}, \emph{Kafka consumer rebalance loop}). The four steps in each chain correspond to \emph{observation}, \emph{hypothesis}, \emph{mitigation}, and \emph{verification}. Each step writes a memory with \texttt{metadata.derived\_from} encoding the parent identifier. After all writes settle, the harness fetches the leaf and walks the chain back to the root, grading three signals:
 \begin{itemize}
     \item \textbf{completeness} --- every ancestor on the planned chain is reachable via \texttt{GET}.
     \item \textbf{accuracy} --- at each step the observed writer matches the planned writer.
@@ -396,12 +422,16 @@ We construct \(25\) derivation chains of depth \(4\) (\(100\) total writes). Eac
 
 \subsection{Propagation Experiment}
 
-A designated writer agent writes \(20\) fleet-scoped facts, each phrased as a substantively distinct operational statement (drawn from \(20\) topic templates). \(3\) sibling readers in the same fleet and \(2\) non-fleet readers in the same tenant then poll \texttt{/search} for the prose. Fleet-sibling probes time out after \(30\) seconds; non-fleet probes execute a single attempt and any hit is counted as a cross-fleet leak.
+The experiment has two deliberately separate phases, because the visibility \emph{rate} and the consistency \emph{latency} want opposite measurement regimes.
 
-For each (writer, fact, reader) tuple, we record:
+\paragraph{Rate phase.} A designated writer agent writes \(40\) fleet-scoped facts, each phrased as a substantively distinct operational statement (drawn from \(40\) templates). \(3\) sibling readers in the same fleet and \(2\) non-fleet readers in the same tenant then poll \texttt{/search} for the prose (\(200\) probes total). Fleet-sibling probes time out after \(30\) seconds; non-fleet probes execute a single attempt and any hit is counted as a cross-fleet leak. This phase scales with the fact count to tighten the rate CIs; its per-probe latency is \emph{not} used (see below).
+
+\paragraph{Window phase.} Because the rate phase seeds every fact before draining any probe through a concurrency gate, a probe's first \texttt{/search} lands long after the row is already searchable --- so its time-to-visibility measures harness scheduling, not server lag, and inflates with probe count. We therefore measure the write-to-visible window separately, on \(8\) dedicated facts (distinct prose, so they do not dedup-collide with the rate-phase set), each polled \emph{immediately and continuously} from write completion at \(250\) ms granularity, one fact at a time so the poll stream stays under the per-tenant \texttt{/search} budget. This isolates the server's single-write consistency window from harness scheduling.
+
+For each (writer, fact, reader) tuple we record:
 \begin{itemize}
-    \item \textbf{visibility} --- whether the reader's search ever returned an item carrying the fact's canary in metadata.
-    \item \textbf{time-to-visibility} --- elapsed wall-clock between write completion and the first successful read.
+    \item \textbf{visibility} --- whether the reader's search ever returned an item carrying the fact's canary in metadata (rate phase).
+    \item \textbf{time-to-visibility} --- elapsed wall-clock between write completion and the first successful read, from the window phase.
     \item \textbf{is\_leak} --- a foreign-fleet reader observed the canary.
 \end{itemize}
 
@@ -415,74 +445,101 @@ We ran the four experiments against the production \texttt{memclaw.net} service 
 \begin{table*}[t]
 \centering
 \small
-\caption{Headline results across the four experiments at \(N = 100\) (planned probes/writes per experiment) on a freshly-provisioned MemClaw tenant. Leakage carries two signals per probe: the authoritative \emph{access} signal from \(\mathtt{GET}\)-by-id, and the secondary \emph{discovery} signal from semantic search. Counts in parentheses indicate the denominator the rate is over.}
+\caption{Headline results across the four experiments at \(N = 200\) (planned probes/writes per experiment) on a freshly-provisioned MemClaw tenant. Leakage carries two signals per probe: the authoritative \emph{access} signal from \(\mathtt{GET}\)-by-id, and the secondary \emph{discovery} signal from semantic search. Counts in parentheses indicate the denominator the rate is over. Each rate is followed by its \(95\%\) Wilson score interval.}
 \label{tab:headline}
 \begin{tabularx}{\linewidth}{lXr}
 \toprule
 Experiment & Metric & Value \\
 \midrule
-\multirow{6}{*}{Leakage}
-  & probes total (planned / executed) & \(96\) / \(96\) \\
-  & \textbf{access} leak rate, GET-by-id (\(n_{\text{deny}}=80\)) & \(\mathbf{1.000}\) \\
-  & \quad 95\% Wilson CI & \([0.954, 1.000]\) \\
-  & \textbf{access} miss rate, GET-by-id (\(n_{\text{allow}}=16\)) & \(0.000\) \\
-  & \textbf{search} leak rate, semantic search (\(n_{\text{deny}}=80\)) & \(0.450\) \\
-  & \textbf{search} miss rate (\(n_{\text{allow}}=16\)) & \(0.250\) \\
-  & access / search latency p50 & \(296\) / \(487\) ms \\
+\multirow{10}{*}{Leakage}
+  & probes total (planned / executed) & \(192\) / \(192\) \\
+  & \textbf{access} leak rate, GET-by-id (\(n_{\text{deny}}=164\)) & \(\mathbf{1.000}\) \\
+  & \quad 95\% Wilson CI & \([0.977, 1.000]\) \\
+  & \textbf{access} miss rate, GET-by-id (\(n_{\text{allow}}=28\)) & \(0.000\) \\
+  & \quad 95\% Wilson CI & \([0.000, 0.121]\) \\
+  & \textbf{search} leak rate, semantic search (\(n_{\text{deny}}=164\)) & \(0.439\) \\
+  & \quad 95\% Wilson CI & \([0.365, 0.516]\) \\
+  & \textbf{search} miss rate (\(n_{\text{allow}}=28\)) & \(0.143\) \\
+  & \quad 95\% Wilson CI & \([0.057, 0.315]\) \\
+  & access / search latency p50 & \(296\) / \(726\) ms \\
 \midrule
-\multirow{3}{*}{Provenance}
-  & chain completeness (depth \(=4\), \(25\) chains) & \(0.56\) \\
-  & writer-identity accuracy (over reachable hops) & \(1.00\) \\
-  & per-hop fetch latency p50 / p95 / p99 & \(290\) / \(333\) / \(430\) ms \\
+\multirow{5}{*}{Provenance}
+  & chain completeness (depth \(=4\), \(50\) chains) & \(\mathbf{1.000}\) \\
+  & \quad 95\% Wilson CI & \([0.929, 1.000]\) \\
+  & writer-identity accuracy (all chains) & \(1.000\) \\
+  & \quad 95\% Wilson CI & \([0.929, 1.000]\) \\
+  & per-hop fetch latency p50 / p95 / p99 & \(291\) / \(491\) / \(1{,}076\) ms \\
 \midrule
-\multirow{5}{*}{Propagation}
-  & writes succeeded (planned \(=20\)) & \(20\) \\
-  & visibility probes produced (planned \(=100\)) & \(100\) \\
-  & fleet-sibling visibility (\(n_{\text{probes}}=60\)) & \(\mathbf{1.000}\) \\
-  & cross-fleet leak rate (\(n_{\text{probes}}=40\)) & \(\mathbf{0.000}\) \\
-  & time-to-visibility p50 / p95 & \(83.2\) / \(130\) s \\
+\multirow{7}{*}{Propagation}
+  & writes succeeded (planned \(=40\)) & \(40\) \\
+  & visibility probes produced (planned \(=200\)) & \(200\) \\
+  & fleet-sibling visibility (\(n_{\text{probes}}=120\)) & \(\mathbf{0.975}\) \\
+  & \quad 95\% Wilson CI & \([0.929, 0.991]\) \\
+  & cross-fleet leak rate (\(n_{\text{probes}}=80\)) & \(\mathbf{0.000}\) \\
+  & \quad 95\% Wilson CI & \([0.000, 0.046]\) \\
+  & write\(\to\)visible window p50 / p95 (tight poll, \(8\) facts) & \(0.83\) / \(1.63\) s \\
 \midrule
-\multirow{4}{*}{Contradiction}
-  & fact-runs total (planned \(=100\)) & \(100\) \\
-  & writes succeeded (planned \(=200\)) & \(74\) \\
-  & detection rate (\(n_{\text{facts}}=100\)) & \(0.000\) \\
-  & write latency p50 / p95 (succeeded) & \(2{,}030\) / \(3{,}730\) ms \\
+\multirow{7}{*}{Contradiction}
+  & writes succeeded (planned \(=400\)) & \(194\) \\
+  & detection rate, all fact-runs (\(n=200\)) & \(0.490\) \\
+  & \quad 95\% Wilson CI & \([0.422, 0.559]\) \\
+  & detection rate, both writes admitted (\(n=90\)) & \(\mathbf{1.000}\) \\
+  & \quad 95\% Wilson CI & \([0.959, 1.000]\) \\
+  & write latency p50 / p95 (succeeded) & \(1{,}840\) / \(4{,}861\) ms \\
+  & write latency p99 & \(19{,}319\) ms \\
 \bottomrule
 \end{tabularx}
 \end{table*}
 
 \subsection{Leakage}
 
-Across \(96\) probes spanning \(80\) expected-deny and \(16\) expected-allow combinations, the two-signal measurement (\S\ref{sec:method}) returns markedly different rates on the two axes; see Fig.~\ref{fig:leakage}. The headline finding is that \emph{scope enforcement is bimodal}:
+Across \(192\) probes spanning \(164\) expected-deny and \(28\) expected-allow combinations, the two-signal measurement (\S\ref{sec:method}) returns markedly different rates on the two axes; see Fig.~\ref{fig:leakage}. The headline finding is that \emph{scope enforcement is bimodal}:
 
 \begin{itemize}
-\item On the authoritative \textbf{access} axis (\(\mathtt{GET}\)-by-id with the probing tenant in the query string), \textsc{leak\_rate} \(= 80/80 = 1.000\) (95\% Wilson CI \([0.954, 1.000]\)) and \textsc{miss\_rate} \(= 0/16 = 0.000\). Every cross-fleet probe within the tenant successfully retrieved the target row; every same-fleet probe also retrieved it. The server enforces tenant boundaries on the \(\mathtt{GET}\) path but does not enforce sub-tenant (fleet, agent) scope. Once an agent in tenant \(T\) holds a \(\mathtt{memory\_id}\), it can fetch the row regardless of which fleet wrote it.
-\item On the secondary \textbf{discovery} axis (semantic search with the probing fleet in \(\mathtt{fleet\_ids}\)), \textsc{search\_leak\_rate} \(= 36/80 = 0.450\) and \textsc{search\_miss\_rate} \(= 4/16 = 0.250\). The search path \emph{partially} honours the fleet filter --- roughly half the cross-fleet probes still surfaced the row, and a quarter of same-fleet probes missed it under embedding-similarity ranking.
+\item On the authoritative \textbf{access} axis (\(\mathtt{GET}\)-by-id with the probing tenant in the query string), \textsc{leak\_rate} \(= 164/164 = 1.000\) (95\% Wilson CI \([0.977, 1.000]\)) and \textsc{miss\_rate} \(= 0/28 = 0.000\). Every cross-fleet probe within the tenant successfully retrieved the target row; every same-fleet probe also retrieved it. The server enforces tenant boundaries on the \(\mathtt{GET}\) path but does not enforce sub-tenant (fleet, agent) scope. Once an agent in tenant \(T\) holds a \(\mathtt{memory\_id}\), it can fetch the row regardless of which fleet wrote it.
+\item On the secondary \textbf{discovery} axis (semantic search with the probing fleet in \(\mathtt{fleet\_ids}\)), \textsc{search\_leak\_rate} \(= 72/164 = 0.439\) and \textsc{search\_miss\_rate} \(= 4/28 = 0.143\). The search path \emph{partially} honours the fleet filter --- roughly \(44\%\) of cross-fleet probes still surfaced the row, and a seventh of same-fleet probes missed it under embedding-similarity ranking.
 \end{itemize}
 
-We interpret the access result not as a security defect but as a function of the authentication model: tenant-scoped API keys (prefix \(\mathtt{mc\_}\)) carry no agent identity, so the gateway has no signal on which to filter fleet/agent scope when the request body is a path-parameter ID. The server-side equivalent of a per-agent capability would require agent-scoped credentials (prefix \(\mathtt{mca\_}\)); the harness operated with a tenant-scoped key. The implication --- that an agent who learns a peer's \(\mathtt{memory\_id}\) can read it directly --- is itself a paper-worthy architectural observation, discussed in \S\ref{sec:findings}.
+A natural objection is that the access leak is merely an artifact of the tenant key carrying no agent identity --- give the gateway an agent identity to filter on and the leak would close. We tested that objection directly with the agent-scoped probe (\S\ref{sec:method}), and it does not hold. The gateway \emph{does} resolve the agent identity for a \(\mathtt{kind{=}agent\_key}\) credential (\texttt{/whoami} returns the bound \(\mathtt{agent\_id}\); a tenant key returns \(\mathtt{agent\_id{=}null}\)), yet \(\mathtt{GET}\)-by-id still returns cross-fleet rows: an agent bound to \(\mathtt{fleet\text{-}0}\) at \(\text{trust}=1\) --- below the trust-\(2\) cross-fleet-read rung --- successfully fetched a \(\mathtt{fleet\text{-}1}\) row, while its same-fleet control and the trust-\(2\) credential behaved as expected (Table~\ref{tab:agentscope}). Inspecting the handler confirms the cause: \(\mathtt{GET\ /memories/\{id\}}\) checks only \(\mathtt{enforce\_readable\_tenant}\) and \(\mathtt{memory.tenant\_id == tenant\_id}\); it never consults the caller's fleet, agent, the row's visibility scope, or the trust level, so the resolved \(\mathtt{agent\_id}\) is discarded. The access leak is therefore a genuine \emph{enforcement gap} on the \(\mathtt{GET}\) path, not an authentication-model artifact: sub-tenant scope and the trust ladder are not applied to direct id-fetch for any credential type. In the terms of \S\ref{sec:problem}, the handler discharges only the tenant projection of \(s_i\), so it violates \textsc{Inv-Scope} for every fleet- or agent-scoped row --- the measured leak is exactly the predicted violation. The practical consequence --- any agent that learns a peer's \(\mathtt{memory\_id}\) (including another agent's agent-scoped secret) can read it --- is discussed in \S\ref{sec:findings}.
 
-Access latency is tighter than search latency (p50 \(=296\) ms vs \(487\) ms), shown in Fig.~\ref{fig:leakage-latency}, consistent with the access path being a direct primary-key lookup while the search path runs an embedding-similarity scan.
+\begin{table}[H]
+\centering
+\small
+\caption{Agent-scoped \(\mathtt{GET}\)-by-id probe. The gateway resolves each agent's identity (confirmed via \texttt{/whoami}); the documented trust ladder defines cross-fleet read at \(\text{trust}\ge 2\). Every probe returned the row (HTTP \(200\)) --- including the trust-\(1\) cross-fleet read the ladder should deny --- because the handler checks only the tenant.}
+\label{tab:agentscope}
+\begin{tabularx}{\linewidth}{Xll}
+\toprule
+Caller credential & Target (relation) & Result \\
+\midrule
+tenant key (\(\mathtt{agent\_id{=}null}\)) & fleet-1 & \(200\) \\
+agent, fleet-0, \(\text{trust}=1\) & fleet-1 (cross-fleet) & \(\mathbf{200}\) \emph{(should deny)} \\
+agent, fleet-0, \(\text{trust}=2\) & fleet-1 (cross-fleet) & \(200\) (allowed) \\
+agent, fleet-0, \(\text{trust}=1\) & fleet-0 (same-fleet) & \(200\) (control) \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Access latency is tighter than search latency (p50 \(=296\) ms vs \(726\) ms), shown in Fig.~\ref{fig:leakage-latency}, consistent with the access path being a direct primary-key lookup while the search path runs an embedding-similarity scan.
 
 \begin{figure}[H]
 \centering
 \includegraphics[width=\linewidth]{leakage_leakage_by_axis.png}
-\caption{Leakage envelope by memory scope. The \textsc{leak\_rate} (over expected-deny probes) is the security signal; the \textsc{miss\_rate} (over expected-allow probes) is the availability signal. Across all scopes, the server returned zero rows to probes that should have been denied; non-zero miss-rate reflects retrieval recall under embedding-similarity search rather than a governance failure.}
+\caption{Leakage envelope by measurement axis. The \textsc{leak\_rate} (over expected-deny probes) is the security signal; the \textsc{miss\_rate} (over expected-allow probes) is the availability signal. Enforcement is bimodal: the authoritative \(\mathtt{GET}\)-by-id \emph{access} axis returns every requested row to any same-tenant caller (\textsc{leak\_rate} \(=1.000\)) --- and this persists even under agent-scoped credentials whose identity the gateway resolves (Table~\ref{tab:agentscope}), because the read handler checks only the tenant; the \emph{discovery} (search) axis applies the fleet filter only partially (\textsc{leak\_rate} \(=0.439\)) and misses a seventh of entitled probes under embedding-similarity ranking.}
 \label{fig:leakage}
 \end{figure}
 
 \begin{figure}[H]
 \centering
 \includegraphics[width=\linewidth]{leakage_search_latency.png}
-\caption{Search-latency distribution across the \(96\) leakage probes. Dashed and dotted vertical lines mark the p50 and p95 of the distribution.}
+\caption{Search-latency distribution across the \(192\) leakage probes. Dashed and dotted vertical lines mark the p50 and p95 of the distribution.}
 \label{fig:leakage-latency}
 \end{figure}
 
 \subsection{Provenance}
 
-We observed end-to-end chain reconstruction with sub-second latency. For chains where every intermediate write landed successfully, the harness walked the four-hop derivation chain via \texttt{metadata.derived\_from} at p50 \(=290\) ms and p95 \(=333\) ms per fetch (median sum-per-chain \(\approx 1.2\) s), with p99 \(=430\) ms. Writer-identity accuracy was \(1.00\) over reachable hops: in every chain that reconstructed, the fetched ancestor's \texttt{agent\_id} matched the planned writer, demonstrating that the server preserves identity through the storage round-trip.
+We observed complete end-to-end chain reconstruction with sub-second per-hop latency. All \(200\) planned writes landed and all \(50\) depth-four chains reconstructed: completeness (every planned ancestor reachable), writer-identity accuracy, and depth-fidelity (no truncation) were each \(1.00\) (Fig.~\ref{fig:prov-completeness}). The harness walked each four-hop derivation chain via \texttt{metadata.derived\_from} at p50 \(=291\) ms and p95 \(=491\) ms per fetch (median sum-per-chain \(\approx 1.2\) s, p99 \(=1.1\) s). In every chain the fetched ancestor's \texttt{agent\_id} matched the planned writer, demonstrating that the server preserves identity through the storage round-trip.
 
-Completeness was bounded by write success rather than retrieval mechanics. \(76\) of \(100\) planned writes landed on a freshly-provisioned tenant; chains containing any failed intermediate write were marked incomplete on principle, yielding \(14/25 = 0.56\) end-to-end completeness at depth four (Fig.~\ref{fig:prov-completeness}). The remaining \(24\) writes were rejected with HTTP \(409\) by the server's near-duplicate detector --- evidence that the dedup gate fires on \emph{intra-run} similarity (the four template verbs --- observation, hypothesis, mitigation, verification --- repeat structurally across the \(25\) chains) rather than on cross-run historical state. The per-fetch latency distribution is shown in Fig.~\ref{fig:prov-latency}.
+Reaching complete reconstruction required pacing writes beneath MemClaw's per-tenant write ceiling. The server caps writes at \(10\) per second per tenant (HTTP \(429\), ``\(10\) per \(1\) second''); because provenance writes are sequential within a chain, an unthrottled run whose concurrency bursts past that ceiling aborts the remainder of any chain whose intermediate write is rejected. Throttling the client to \(8\) writes/second --- below the ceiling --- eliminates the rejections without altering the workload, and is what separates the complete reconstruction reported here from earlier runs that lost chains to rate-limited writes. The per-fetch latency distribution is shown in Fig.~\ref{fig:prov-latency}.
 
 \begin{figure}[H]
 \centering
@@ -494,44 +551,46 @@ Completeness was bounded by write success rather than retrieval mechanics. \(76\
 \begin{figure}[H]
 \centering
 \includegraphics[width=\linewidth]{provenance_fetch_latency.png}
-\caption{Per-hop fetch-latency distribution across all provenance chain walks. The p50 of \(307\) ms and p95 of \(357\) ms support chain reconstruction at interactive latencies even at depth four.}
+\caption{Per-hop fetch-latency distribution across all provenance chain walks. The p50 of \(291\) ms and p95 of \(491\) ms support chain reconstruction at interactive latencies even at depth four (p99 \(=1.1\) s).}
 \label{fig:prov-latency}
 \end{figure}
 
 \subsection{Propagation}
 
-All \(20\) planned writes landed and all \(100\) downstream visibility probes fired. Fleet-sibling visibility was \(\mathbf{60/60 = 1.000}\) across intra-fleet probes, with zero cross-fleet leaks across \(\mathbf{40}\) foreign-fleet probes (\textsc{leak\_rate} \(= 0/40\)). The time-to-visibility distribution is heavy-tailed: p50 \(=83.2\) s, p95 \(=130\) s, p99 \(=130\) s. This figure characterises the eventual-consistency window for cross-agent propagation in production: a fleet sibling can expect to see a newly-written fact via search within approximately one to two minutes under nominal load, even when the originating write returned a 2xx response promptly. The longer p50 here relative to earlier runs against a warm tenant reflects cold-cache costs on the index-installation path; subsequent runs against the same tenant should drop the percentiles.
+All \(40\) planned writes landed and all \(200\) downstream visibility probes fired. Fleet-sibling visibility was \(\mathbf{117/120 = 0.975}\) (\(95\%\) Wilson score interval \([0.929, 0.991]\)) across intra-fleet probes, with zero cross-fleet leaks across \(\mathbf{80}\) foreign-fleet probes (\textsc{leak\_rate} \(= 0/80\), \(95\%\) Wilson CI \([0.000, 0.046]\)). The three misses are siblings whose canary never surfaced before the \(30\)-second poll deadline --- a retrieval-recall effect (with many similar facts in the fleet, the target can rank below the top-\(k\)), not a propagation failure.
 
-This latency is dominated by asynchronous server-side enrichment (embedding generation and index installation). The harness's polling cadence and timeout were tuned to a \(30\)-second visibility window initially; the run reported here uses a \(95\)-second polling window based on observed tail behaviour. Fig.~\ref{fig:prop-visibility} contrasts the intra-fleet and cross-fleet visibility rates side by side, and Fig.~\ref{fig:prop-tvisible} shows the full time-to-visibility distribution for the fleet-sibling axis.
+We measure the write-to-visible window separately, on \(8\) dedicated facts each polled tightly from write completion at \(250\) ms granularity (\S\ref{sec:method}). Under \texttt{write\_mode\,=\,strong} the row is searchable the \emph{instant} the write returns: all \(8\) facts surfaced on the poller's \emph{first} search after the write (\(\mathtt{poll\_count}=1\)), with a median time-to-visible of \(0.83\) s and a max of \(1.97\) s --- itself essentially one search round-trip, indistinguishable from the search-latency floor (leakage search p50 \(\approx 0.73\) s). Strong-mode enrichment is therefore \emph{synchronous}: its cost is paid in the write latency (p50 \(\approx 1.8\) s, \S\ref{sec:results}), and there is no measurable post-write eventual-consistency tail.
+
+This revises an earlier, naive measurement. Seeding every fact and \emph{then} draining all probes through a concurrency gate makes a probe's first \(\mathtt{/search}\) land long after the row is already searchable; that schedule reported a p50 of tens of seconds, which grows with probe count. It is a probe-scheduling artifact, not server behaviour --- which is precisely why we measure the window with the dedicated tight-polling phase instead (\S\ref{sec:limitations}). The rate phase's fleet-sibling probes still poll \texttt{/search} up to a \(30\)-second deadline (cross-fleet readers issue a single attempt), but only their visibility/leak \emph{outcomes} are used, not their latency. Fig.~\ref{fig:prop-visibility} contrasts the intra-fleet and cross-fleet visibility rates side by side, and Fig.~\ref{fig:prop-tvisible} shows the window-phase time-to-visibility distribution.
 
 \begin{figure}[H]
 \centering
 \includegraphics[width=\linewidth]{propagation_visibility_by_relation.png}
-\caption{Visibility rate by reader relation. Fleet siblings (intra-fleet readers) eventually saw every fact for which a write succeeded; foreign-fleet readers (same tenant, different fleet) saw none. Annotations show (visible~/~total) probe counts per axis.}
+\caption{Visibility rate by reader relation. Fleet siblings (intra-fleet readers) saw nearly every fact (\(117/120\)); the three misses are writes whose canary ranked below the top-\(k\) under embedding-similarity search (a recall effect, not a propagation failure). Foreign-fleet readers (same tenant, different fleet) saw none (\(0/80\)). Annotations show (visible~/~total) probe counts per axis.}
 \label{fig:prop-visibility}
 \end{figure}
 
 \begin{figure}[H]
 \centering
 \includegraphics[width=\linewidth]{propagation_time_to_visibility.png}
-\caption{Time-to-visibility distribution for fleet-sibling probes, in milliseconds from write completion to the first successful search. The eventual-consistency window is heavy-tailed: p50 \(\approx 50\) s with p95 around \(95\) s.}
+\caption{Write-to-visible window from the dedicated window phase: \(8\) facts, each polled tightly from write completion at \(250\) ms granularity. Under strong write mode every fact surfaced on the poller's first search (p50 \(=0.83\) s, max \(1.97\) s) --- one search round-trip, i.e.\ effectively immediate. This isolates the server's single-write consistency window from the probe-scheduling inflation a batched schedule exhibits (\S\ref{sec:limitations}).}
 \label{fig:prop-tvisible}
 \end{figure}
 
 \subsection{Contradiction}
 
-The contradiction experiment produced a null result that the clean-tenant run makes essentially indisputable: \textsc{detection\_rate} \(= 0/100\) and \textsc{stale\_read\_rate} \(= 0/100\). Of \(200\) planned writes (\(100\) fact-runs \(\times\) two writes each), only \(74\) landed; the remaining \(126\) were rejected with HTTP \(409\) \texttt{near-duplicate}.
+Measured correctly, the contradiction primitive \emph{works}. Conditional on both contradictory writes being admitted, supersession was established in \textbf{every} case --- \(90/90 = 1.000\) (\(95\%\) Wilson CI \([0.959, 1.000]\)): a post-commit re-fetch found the newer row carrying \texttt{supersedes\_id} pointing at the older, and the older flipped to \texttt{outdated}, within \(\approx\!6\) s of the write. Overall \textsc{detection\_rate} is \(98/200 = 0.490\); the gap from \(1.0\) is entirely an \emph{admission} effect, not a detector failure (see below).
 
-Crucially, the tenant was freshly provisioned --- no prior ArgusFleet state, no historical writes to dedup against. The dedup gate is therefore firing on \emph{intra-run} similarity: the second write of each contradictory pair (e.g., \(\langle \text{service-7}, \text{deployment\_region}, \text{us-west-2} \rangle\) followed by \(\langle \text{service-7}, \text{deployment\_region}, \text{eu-central-1} \rangle\)) is rejected as a near-duplicate of \emph{the first write of the same pair}. On a polluted tenant this could be confounded with cross-run accumulated state; here it cannot. The pipeline ordering --- embedding-similarity gate before structural-contradiction detector --- is the architectural cause, discussed in \S\ref{sec:findings}.
+Two corrections to an earlier, mis-measured version of this experiment underlie the result. First, detection is \emph{post-commit and asynchronous}: \texttt{supersedes\_id} is set after the write response returns, so reading it from the synchronous response (as we first did) reports a spurious \(0/200\). The re-fetch (\S\ref{sec:method}) is what surfaces the true outcome. Second, the structural detector only runs for predicates the server treats as single-valued; our earlier \texttt{deployment\_region} was not one, so the RDF path was silently skipped. Using a single-valued predicate (\texttt{region}, \texttt{runs\_on}, \dots) and re-fetching post-settle fixes both.
 
-Switching the write payload to carry an explicit RDF triple --- a shared \texttt{subject\_entity\_id} and \texttt{predicate} with differing \texttt{object\_value} --- was insufficient to bypass the embedding pre-filter. The \textsc{stale\_read\_rate} of \(0\) confirms a complementary observation: on the rare path where both contradictory writes did land, the server's downstream read filter prevented multiple conflicting rows from being simultaneously active. So the read side enforces eventual consistency correctly; only the write-side pipeline blocks the structural detector.
+The \(0.490\) ceiling is set by write \emph{admission}: \(206/400\) writes were rejected \(409\) by the synchronous dedup gate before reaching the (post-commit) detector, so \(90\) fact-runs had both writes land. The rejections fall roughly evenly across the first and second write of a pair and are dominated by exact-content duplicates --- partly the genuine dedup-pre-empts-contradiction effect of \S\ref{sec:findings} (a contradiction phrased as ``\(X\) is \(A\)'' vs ``\(X\) is \(B\)'' is near-identical text), partly limited prose diversity in our workload generator. We do not cleanly separate the two; the robust claim is the conditional one: \emph{when both writes are admitted, supersession is correct \(90/90\)}. Admission is stochastic --- concurrent writes race at the dedup gate and content is nonce-salted per run --- so the counts vary run-to-run around a stable rate. Four independent \(N{=}200\) runs gave both-admitted \(90\)--\(91\) and detections \(96\)--\(100\) (\textsc{detection\_rate} \(0.48\)--\(0.50\)); the run of record's both-admitted \(=90\) equals \(2\times\) the \(N{=}100\) run's \(45\) by coincidence, whereas the sibling runs give \(91\), which does not double it. All five \(N{=}200\) and \(N{=}100\) contradiction traces are committed under \texttt{traces/} in the released harness, so the spread (and the absence of any exact-scaling artifact) is directly verifiable from the per-write event streams rather than asserted here. The overall detection count (\(98\)) slightly exceeds both-admitted (\(90\)) because a fact's sequential and concurrent scenarios share a \texttt{subject\_entity\_id} and predicate, so the single admitted write in one scenario can supersede the admitted write in the other: \(8\) such cross-scenario detections (\(4\) fact pairs) arise where each scenario admitted only one of its two writes. \textsc{stale\_read\_rate} was \(0/200\) (no fact-run returned two active rows), consistent with the older row being marked \texttt{outdated} on resolution; with search visibility now measured at \(\sim\!1\) s (\S\ref{sec:results}), well inside the \(20\) s settle, this signal is no longer materially confounded by search lag, though the GET-by-id re-fetch remains the primary one.
 
-Write-latency p50 of \(2{,}030\) ms and p95 of \(3{,}730\) ms (across the \(74\) writes that completed) reflect the cost of running the full enrichment pipeline (\texttt{write\_mode = strong}); subsequent contradiction-detector cost is therefore an upper bound on the difference between observed and steady-state write latency, not a lower bound. Fig.~\ref{fig:contra-write} shows the latency distribution; the p50/p95 markers indicate the cost a caller can budget for a strong-mode write in the absence of a successful supersession.
+Write-latency p50 of \(1{,}840\) ms and p95 of \(4{,}861\) ms (p99 \(19{,}319\) ms, across the \(194\) writes that completed) reflect the cost of the full enrichment pipeline (\texttt{write\_mode = strong}); the heavier p95/p99 tail relative to the smaller run is queueing when more writes contend for the synchronous pipeline at once. Because contradiction detection is post-commit and asynchronous, it adds nothing to this synchronous write latency. Fig.~\ref{fig:contra-write} shows the distribution.
 
 \begin{figure}[H]
 \centering
 \includegraphics[width=\linewidth]{contradiction_write_latency.png}
-\caption{Write-latency distribution under \texttt{write\_mode = strong} for the contradiction experiment, in milliseconds. The dashed and dotted markers indicate p50 and p95. Because the contradiction detector did not fire in this dataset (the embedding-similarity dedup gate pre-empted it; see \S\ref{sec:findings}), this distribution characterises the steady-state strong-mode write path, not the additional cost contributed by contradiction resolution.}
+\caption{Write-latency distribution under \texttt{write\_mode = strong} for the contradiction experiment, in milliseconds (p50 \(1{,}840\), p95 \(4{,}861\); dashed/dotted markers). Contradiction detection runs post-commit and asynchronously, so it contributes nothing to this synchronous write latency: the distribution characterises the steady-state strong-mode write path, with the supersession established afterward (\(\approx\!6\) s, \S\ref{sec:results}).}
 \label{fig:contra-write}
 \end{figure}
 
@@ -545,13 +604,14 @@ The empirical study surfaces three architectural findings about production memor
 
 The leakage experiment surfaces a structural asymmetry in how scope is enforced. Tenant boundaries are enforced uniformly: cross-tenant requests are rejected on both \(\mathtt{GET}\)-by-id and \(\mathtt{POST}\)-search paths (the leakage rate measurements above were collected within a single tenant for that reason --- cross-tenant probes do not reach the read handlers at all). \emph{Sub-tenant} scope --- fleet and agent --- is enforced only on the search path, and only partially.
 
-Direct \(\mathtt{GET}\)-by-id returns a row to any caller who presents the correct \(\mathtt{tenant\_id}\), regardless of the originating fleet or writer. This is because the request body of \(\mathtt{GET\ /memories/\{id\}}\) is a path parameter and a tenant query parameter; no agent identity flows in. The gateway has no signal on which to apply a fleet/agent filter for tenant-scoped API keys. Search, by contrast, accepts \(\mathtt{fleet\_ids}\) in the request body and applies it as a filter, but the filter coexists with embedding-similarity ranking: in our measurement \(45\%\) of cross-fleet probes still surfaced the row.
+Direct \(\mathtt{GET}\)-by-id returns a row to any caller who presents the correct \(\mathtt{tenant\_id}\), regardless of the originating fleet or writer. Crucially, this holds even when the caller presents an agent-scoped credential whose identity the gateway resolves (\S\ref{sec:results}, Table~\ref{tab:agentscope}): the \(\mathtt{get\_memory}\) handler enforces only the tenant predicate (\(\mathtt{enforce\_readable\_tenant}\) plus \(\mathtt{memory.tenant\_id == tenant\_id}\)) and never consults the caller's fleet/agent, the row's visibility scope, or the trust level --- so the agent identity, present in-request as \(\mathtt{X\text{-}Agent\text{-}ID}\), is simply discarded. Search, by contrast, accepts \(\mathtt{fleet\_ids}\) in the request body and applies it as a filter, but the filter coexists with embedding-similarity ranking: in our measurement \(43.9\%\) (\(72/164\)) of cross-fleet probes still surfaced the row.
 
-We argue this asymmetry is a property of the authentication model rather than a defect. Agent-scoped keys (prefix \(\mathtt{mca\_}\)) would let the gateway resolve a requesting agent's fleet and apply scope to \(\mathtt{GET}\) as well as search. Production deployments today predominantly issue tenant-scoped keys (prefix \(\mathtt{mc\_}\)), which means: \emph{in practice, any agent within a tenant who learns a peer's \(\mathtt{memory\_id}\) can read the row.} For governed-memory architectures to deliver sub-tenant scope, propagation of \(\mathtt{memory\_id}\) values across fleet boundaries must itself be treated as a privileged operation, or the authentication model must shift toward agent-scoped credentials. This is an underexplored interaction between identity and primitive design.
+We initially conjectured this asymmetry was a property of the authentication model rather than a defect --- that agent-scoped keys would let the gateway resolve a requesting agent's fleet and apply scope to \(\mathtt{GET}\) as it does to search. The probe in \S\ref{sec:results} refutes that conjecture: the identity \emph{is} resolved and then ignored by the handler, so a trust-\(1\) agent reads a cross-fleet row that the trust ladder should deny. It is therefore a genuine enforcement gap --- a standing violation of \textsc{Inv-Scope} (\S\ref{sec:problem}) --- not a credential limitation. Production deployments predominantly issue tenant-scoped keys, but agent-scoped ones do not close it either, which means \emph{in practice any agent within a tenant who learns a peer's \(\mathtt{memory\_id}\) can read the row}, including another agent's agent-scoped secret. Closing it requires the id-fetch handler to apply the same fleet/agent/scope filter the search path already carries and to honour the trust ladder; until then, the propagation of \(\mathtt{memory\_id}\) values across fleet boundaries is itself the de-facto capability boundary --- an underexplored and fragile interaction between identity and primitive design.
 
-\subsection{Deduplication Precedes Contradiction Detection}
+\subsection{Deduplication Starves Contradiction Detection}
+\label{sec:findings-dedup}
 
-The contradiction null result is not a refutation of the architectural primitive; it is evidence that two distinct mechanisms in the production write path are ordered in a way that prevents the primitive from being exercised. A semantic near-duplicate detector evaluates incoming writes against existing rows by embedding similarity, returning \(409\) when similarity exceeds a threshold. A separate contradiction detector evaluates RDF-triple compatibility and produces \texttt{supersedes\_id} when two writes assert different \texttt{object\_value} over the same \(\langle\)entity, predicate\(\rangle\) key. In the current pipeline ordering, near-duplicate rejection short-circuits the contradiction path, because contradictory writes are by construction lexically similar to their counterparts.
+The contradiction detector itself is sound: conditional on both writes being admitted, it superseded correctly in every case (\(90/90\), \S\ref{sec:results}). The architectural issue is that two mechanisms on the write path interact badly. A semantic near-duplicate detector evaluates an incoming write synchronously, \emph{pre-commit}, returning \(409\) when embedding similarity exceeds a threshold. The contradiction detector evaluates RDF-triple compatibility and sets \texttt{supersedes\_id} --- but it runs \emph{post-commit and asynchronously}. So the synchronous gate can reject a write before the asynchronous detector ever sees it. The pathological case is intrinsic: a contradiction phrased naturally (``\(X\) is \(A\)'' then ``\(X\) is \(B\)'') is near-identical text, so the very writes the detector exists to resolve are the ones most likely to be 409'd at the gate. (This is also why the detector reads as a ``null'' under naive measurement --- it never receives the input, and \texttt{supersedes\_id} is async besides.)
 
 We argue this ordering is incorrect: a contradiction is precisely a near-duplicate with a different assertive object, and conflating the two collapses two distinct architectural primitives into one error code. We propose either (a) reordering the pipeline so that structural contradiction detection runs first when a write carries an RDF triple, or (b) widening the near-duplicate threshold for writes that carry an RDF triple, since the structural signal is the more discriminating one.
 
@@ -561,23 +621,34 @@ The \texttt{POST /memories/redistribute} endpoint requires the requesting agent 
 
 We argue that fleet-scoped propagation between sibling agents inside a fleet should be available at the same trust level as fleet-scoped writes, and that the higher trust gate should apply only to cross-fleet or cross-scope re-homing. The current production behaviour is consistent with treating all redistributes as administrative migrations; under a governed-memory architecture the propagation primitive should expose a finer-grained policy surface.
 
-\subsection{Eventual Consistency Is a Real Cost}
+\subsection{The Consistency Cost Is Paid at Write Time, Not Read Time}
 
-Time-to-visibility p50 \(\approx 38\) s and p95 \(\approx 49\) s indicate that production governed memory systems carry a non-trivial eventual-consistency window between write completion and search visibility. For workflows in which a downstream agent's behaviour depends on observing an upstream agent's write, this window is part of the system's latency budget. This is not a defect of MemClaw specifically; it is a characteristic of any production memory service that performs asynchronous enrichment after the synchronous write path returns. Quantifying this window per service is a prerequisite for reasoning about workflow correctness in multi-agent orchestration.
+Measured with tight per-fact polling \emph{at low contention} (the window phase polls one fact at a time; \S\ref{sec:results}), the write-to-visible window under \texttt{write\_mode\,=\,strong} is effectively zero: a fleet sibling's first search after the write already returns the row (p50 \(\approx 0.8\) s --- one search round-trip). Strong-mode enrichment is \emph{synchronous}, so the consistency cost is paid in the write latency, not as a post-write read-visibility lag --- but that cost is load-dependent: at the sustained write concurrency of the contradiction run the write-latency p99 reaches \(19\) s (\S\ref{sec:results}), against a p50 of \(\approx\!1.8\) s. The window phase, deliberately uncontended, measures the visibility floor; the write-latency tail is the price the same consistency guarantee charges under load.
+
+This matters methodologically as much as architecturally. A naive measurement that seeds every write and \emph{then} drains read probes reports a window of tens of seconds that \emph{grows with probe count} --- the entire figure is harness scheduling, not server behaviour, because a drained probe's first look lands long after the row is already searchable. (An earlier version of this work reported exactly such a figure.) Quantifying a service's true consistency window therefore requires polling each write immediately and continuously, decoupled from the rate workload; otherwise one measures one's own client. The architectural takeaway is robust to that subtlety: the placement of enrichment on the write path versus the read path is a first-order design choice, and a service that enriches synchronously (as MemClaw does under strong mode) buys immediate read consistency at the price of write latency --- the budget a multi-agent orchestrator must plan against is the write, not a visibility tail.
 
 \section{Limitations}
 \label{sec:limitations}
 
 Several limitations bound the scope of the empirical claims in \S\ref{sec:results}.
 
-\paragraph{Tenant-scoped authentication limits sub-tenant testing.}
-All measurements were collected with a single tenant-scoped API key (prefix \(\mathtt{mc\_}\)), which carries no agent identity in transit. As discussed in \S\ref{sec:findings-bimodal}, this means the \(\mathtt{GET}\)-by-id path cannot enforce fleet or agent scope --- and our leakage measurement of \textsc{leak\_rate} \(=80/80\) on that axis is a consequence of the authentication model, not of a server-side defect. A complementary evaluation with agent-scoped keys (prefix \(\mathtt{mca\_}\)) would let the gateway resolve the requesting agent and apply scope to \(\mathtt{GET}\); we did not have authorisation to provision such credentials for this paper.
+\paragraph{Self-evaluation.}
+ArgusFleet and MemClaw are built by the same group; this is an evaluation of our own production service, not an independent audit. We mitigate the obvious bias by reporting the unflattering results prominently --- the \(\mathtt{GET}\)-by-id enforcement gap, the dedup/contradiction pipeline-ordering issue, and the upper-bound visibility window --- and by deriving every figure from a committed JSONL trace. An independent replication, which the open harness enables against any wire-compatible service, would carry more weight than our own numbers.
+
+\paragraph{Agent-scope probe is focused, not exhaustive.}
+The bulk leakage rates were collected with a tenant-scoped key, but we separately provisioned agent-scoped credentials and confirmed (Table~\ref{tab:agentscope}, \S\ref{sec:findings-bimodal}) that the \(\mathtt{GET}\)-by-id enforcement gap is credential-independent --- the gateway resolves the agent identity and the handler ignores it. That probe is deliberately small: one trust-\(1\) cross-fleet read, one trust-\(2\) control, one same-fleet control, each on a single row. The conclusion rests as much on reading the \(\mathtt{get\_memory}\) handler (which contains no fleet/agent/scope predicate) as on the probe, but a fuller adversarial matrix --- many agents, fleets, trust levels, and scopes --- would harden the rate estimate. Cross-\emph{tenant} isolation remains untested for the separate reason below.
+
+\paragraph{Staleness-after-supersession is only partially measured.}
+The contradiction experiment establishes the \emph{resolution} side of staleness: when both writes are admitted the older row flips to \texttt{outdated} and the newer carries \texttt{supersedes\_id} (\S\ref{sec:results}, \(90/90\)), and \(\textsc{stale\_read\_rate} = 0/200\) found no fact-run serving two simultaneously-active rows. But the stale-read check rides on semantic search, whose enrichment window we now measure directly at \(\sim\!1\) s (\S\ref{sec:results}) --- well within the \(20\)-second settle --- so a \(0\) there reflects correct resolution rather than search lag. (An earlier draft, which inferred the window from the batched probe schedule rather than measuring it, could not separate the two.) The GET-by-id re-fetch remains the primary signal; the \texttt{active}-search exclusion now corroborates it instead of being confounded by lag.
 
 \paragraph{Single tenant.}
 All measurements were collected from a single MemClaw tenant, freshly provisioned. The cross-\emph{tenant} leakage probe surface, which would exercise the strongest governance claim, is not measurable in this configuration. The harness supports multi-tenant configuration via the \texttt{MEMCLAW\_TENANT\_ID} list and we expect cross-tenant probes to be uniformly rejected by the gateway's tenant enforcement (\S\ref{sec:findings-bimodal}); confirming that empirically remains future work.
 
 \paragraph{Workload scale.}
-We report \(100\) trials per experiment. The \(\textsc{leak\_rate}\) Wilson interval at \(80/80\) is \([0.954, 1.000]\); the \(\textsc{cross-fleet leak rate}\) at \(0/40\) in propagation is bounded above by approximately \(0.09\). Stronger claims would benefit from an order of magnitude more probes and probes constructed adversarially rather than via deterministic plan generation.
+We report \(200\) trials per experiment. The \(\textsc{leak\_rate}\) Wilson interval at \(164/164\) is \([0.977, 1.000]\); the \(\textsc{cross-fleet leak rate}\) at \(0/80\) in propagation is bounded above by approximately \(0.046\). Stronger claims would benefit from a further order of magnitude more probes and probes constructed adversarially rather than via deterministic plan generation.
+
+\paragraph{Time-to-visibility requires decoupled measurement.}
+Time-to-visibility cannot be read off the rate-phase probes: seeding every write and then draining all probes through a concurrency gate makes each probe's first \(\mathtt{/search}\) land after the row is already searchable, so the recorded latency measures harness scheduling and \emph{grows with probe count} (an earlier version of this work reported a p50 of tens of seconds for exactly this reason). We therefore measure the window on a small set of facts polled immediately and continuously from write completion (\S\ref{sec:method}), one at a time so the polls stay under the \(\mathtt{/search}\) budget; under strong mode this yields a p50 of \(\sim\!0.8\) s (\S\ref{sec:results}). The residual limitation is granularity and scale: the window is measured at \(250\) ms resolution on \(8\) facts, so it resolves ``effectively immediate'' but not a sub-\(250\) ms value, and a larger, multi-region sweep would sharpen the tail and test whether the synchronous-enrichment behaviour holds under sustained load.
 
 \paragraph{No comparand.}
 We do not compare against a baseline (e.g., a long-context-only configuration, or an alternative memory implementation). The architectural claims of \S5 stand on the failure-mode taxonomy and the implementation, but the empirical claims would be sharper with a comparison condition.
@@ -586,7 +657,7 @@ We do not compare against a baseline (e.g., a long-context-only configuration, o
 
 We introduced a systems architecture for governed shared memory in multi-agent LLM environments, instantiated it in MemClaw, and evaluated the resulting primitives using ArgusFleet, a reproducible harness that exercises the four governance failure modes of \S\ref{sec:failures} as four experiments against a live memory service, reporting five metric axes: governance correctness, contradiction handling, provenance reconstruction, and cross-agent visibility --- one per failure mode --- plus \emph{retrieval recall} as an orthogonal availability control sharing its probe set with the leakage experiment.
 
-The empirical study shows that provenance chain traversal is feasible at sub-second per-hop latency (p50 \(\approx 290\) ms at depth four), that cross-fleet propagation in the propagation experiment is correct on \(60/60\) intra-fleet probes with zero leaks across \(40\) foreign-fleet probes, and that the eventual-consistency window between write completion and search visibility is on the order of \(83\) s at p50 (\(130\) s at p95). It also surfaces three architectural observations: scope enforcement is bimodal --- tenant-level isolation is enforced on every path, while sub-tenant scope is enforced partially on the search path and not at all on direct \(\mathtt{GET}\)-by-id; semantic deduplication on the write path pre-empts contradiction detection even on a clean tenant where no historical near-duplicates exist; and cross-agent memory re-homing is privilege-gated in a way that conflates fleet-internal propagation with administrative migration.
+The empirical study shows that provenance chains reconstruct completely (\(50/50\)) at sub-second per-hop latency (p50 \(\approx 291\) ms at depth four) once writes are paced below the server's rate ceiling, that cross-fleet propagation is correct on \(117/120\) intra-fleet probes (\(0.975\)) with zero leaks across \(80\) foreign-fleet probes, and that --- measured by tight per-fact polling at low load --- the write-to-visible window under strong write mode is effectively immediate (p50 \(\approx 0.8\) s, one search round-trip), with the consistency cost paid in write latency (which itself develops a heavy tail, p99 \(\approx 19\) s, under sustained write contention) rather than as a read-visibility lag. It also surfaces three architectural observations: scope enforcement is bimodal --- tenant-level isolation is enforced on every path, while sub-tenant scope is enforced partially on the search path and not at all on direct \(\mathtt{GET}\)-by-id (a gap we confirm is credential-independent: the read handler discards even a resolved agent identity); contradiction supersession is correct when both writes are admitted (\(90/90\)), but a synchronous dedup gate pre-empts near-identically phrased contradictory writes before the asynchronous detector runs; and cross-agent memory re-homing is privilege-gated in a way that conflates fleet-internal propagation with administrative migration.
 
 We argued throughout that AI memory is evolving from a context-window problem into a distributed systems problem requiring governance, synchronization, temporal correctness, provenance, and scoped access control. The empirical results support this framing: in production memory infrastructure, the primitives that matter for correctness are precisely the ones inherited from distributed systems --- consistency windows, identity preservation through round-trips, ordering of pipeline stages, and the privilege model attached to propagation. As AI systems continue shifting from isolated assistants toward coordinated fleets of agents, governed shared memory becomes a foundational infrastructure layer whose architectural choices have measurable consequences for the workflows built on top.
 

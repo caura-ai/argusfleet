@@ -53,9 +53,13 @@ def _read_summary(summary_path: Path) -> dict[str, Any]:
         return {}
     try:
         df = pd.read_csv(summary_path)
+        # The column access must stay inside the guard: a CSV that parses
+        # but lacks ``metric``/``value`` (a truncated/partial run) would
+        # otherwise KeyError out here, aborting the whole report instead of
+        # degrading this one run to ``{}``.
+        return dict(zip(df["metric"].astype(str), df["value"]))
     except Exception:
         return {}
-    return dict(zip(df["metric"].astype(str), df["value"]))
 
 
 def _discover_runs(outputs_dir: Path) -> dict[str, _RunInfo]:

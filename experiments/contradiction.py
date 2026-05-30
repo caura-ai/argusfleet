@@ -93,7 +93,26 @@ class _ContradictionFact:
     predicate: str
     value_a: str
     value_b: str
+    # Pre-rendered, lexically *distinct* prose for the two writes. The two
+    # contradictory writes must not be near-duplicates of each other, or
+    # the synchronous embedding-dedup gate 409s the second before the
+    # (async, post-commit) contradiction detector ever sees it. Distinct
+    # phrasing per value keeps them past the gate.
+    prose_a: str
+    prose_b: str
     scenario: str  # "sequential" | "concurrent"
+
+
+def tenant_ids_for(cfg: HarnessConfig) -> list[str]:
+    """Tenant this experiment will write to (single source of truth for
+    fact-building and ``run all`` cleanup; see leakage.tenant_ids_for)."""
+    exp = cfg.experiment or {}
+    tenant_id = (
+        (cfg.tenant_ids[0] if cfg.tenant_ids else None)
+        or exp.get("tenant_id")
+        or f"mc_ctr_{cfg.seed}"
+    )
+    return [tenant_id]
 
 
 def _build_facts(cfg: HarnessConfig, *, nonce: str) -> list[_ContradictionFact]:
@@ -101,40 +120,57 @@ def _build_facts(cfg: HarnessConfig, *, nonce: str) -> list[_ContradictionFact]:
     exp = cfg.experiment or {}
     n_facts: int = int(exp.get("n_facts", 8))
     scenarios: list[str] = list(exp.get("scenarios", ["sequential", "concurrent"]))
-    tenant_id: str = (
-        (cfg.tenant_ids[0] if cfg.tenant_ids else None)
-        or exp.get("tenant_id")
-        or f"mc_ctr_{cfg.seed}"
-    )
+    tenant_id: str = tenant_ids_for(cfg)[0]
     fleet_id: str = exp.get("fleet_id") or "fleet_ctr"
 
     # Subject templates are paired with the RDF ``predicate`` the
-    # contradiction will be expressed over. Two writes for the same
-    # fact share ``(subject_entity_id, predicate)`` but assert different
-    # ``object_value`` — the deterministic signal the server's
-    # structural contradiction detector watches for.
+    # contradiction is expressed over. The predicate MUST be one of the
+    # server's ``SINGLE_VALUE_PREDICATES`` — the structural contradiction
+    # detector only runs Path 1 (RDF conflict) for those; an arbitrary
+    # predicate (e.g. the former ``deployment_region``) is silently
+    # skipped, which is one reason earlier runs reported zero detections.
+    # Two writes for a fact share ``(subject_entity_id, predicate)`` but
+    # assert different ``object_value``.
     templates: list[tuple[str, str, list[str]]] = [
-        ("billing-service-{n}", "deployment_region", ["us-west-2", "eu-central-1", "ap-south-1"]),
-        ("ingest-team-{n}", "primary_oncall", ["alice", "bob", "carol"]),
-        ("project-{n}", "oltp_database", ["postgres", "mysql", "cockroachdb"]),
-        ("tenant-cluster-{n}", "auth_provider", ["auth0", "okta", "cognito"]),
-        ("merchant-store-{n}", "payment_processor", ["stripe", "adyen", "braintree"]),
-        ("marketing-site-{n}", "cdn_provider", ["cloudflare", "fastly", "akamai"]),
-        ("postmortem-{n}", "severity", ["sev1", "sev2", "sev3"]),
-        ("customer-segment-{n}", "data_residency", ["EU", "US", "APAC"]),
-        ("prod-cluster-{n}", "ingress_controller", ["nginx", "traefik", "haproxy"]),
-        ("queue-worker-{n}", "message_broker", ["kafka", "rabbitmq", "pulsar"]),
-        ("service-{n}", "runtime_version", ["python-3.12", "python-3.13", "nodejs-20"]),
-        ("monitoring-stack-{n}", "observability_vendor", ["datadog", "newrelic", "honeycomb"]),
-        ("engineering-seat-{n}", "license_type", ["enterprise", "team", "individual"]),
-        ("canary-deploy-{n}", "acceptance_threshold", ["95", "99", "99.9"]),
-        ("log-stream-{n}", "retention_days", ["7", "30", "365"]),
-        ("stateful-set-{n}", "primary_az", ["us-east-1a", "us-east-1b", "us-east-1c"]),
-        ("archive-bucket-{n}", "compression_codec", ["zstd", "gzip", "snappy"]),
-        ("product-taxonomy-{n}", "source_of_truth", ["pim", "erp", "ldap"]),
-        ("high-priority-job-{n}", "dispatch_policy", ["fifo", "priority", "fair"]),
-        ("tenant-namespace-{n}", "secret_backend", ["vault", "kms", "doppler"]),
+        ("billing-service-{n}", "region", ["us-west-2", "eu-central-1", "ap-south-1"]),
+        ("analytics-job-{n}", "runs_on", ["postgres", "mysql", "cockroachdb"]),
+        ("ingest-team-{n}", "led_by", ["alice", "bob", "carol"]),
+        ("incident-{n}", "status", ["sev1", "sev2", "sev3"]),
+        ("data-pipeline-{n}", "located_in", ["eu", "us", "apac"]),
+        ("edge-cache-{n}", "hosted_on", ["cloudflare", "fastly", "akamai"]),
+        ("auth-cluster-{n}", "type", ["auth0", "okta", "cognito"]),
+        ("payment-flow-{n}", "category", ["stripe", "adyen", "braintree"]),
+        ("gateway-{n}", "runs_on", ["nginx", "traefik", "haproxy"]),
+        ("event-bus-{n}", "type", ["kafka", "rabbitmq", "pulsar"]),
+        ("worker-pool-{n}", "phase", ["bootstrapping", "steady", "draining"]),
+        ("telemetry-{n}", "owned_by", ["sre-team", "platform-team", "data-team"]),
+        ("engineering-seat-{n}", "role", ["enterprise", "team", "individual"]),
+        ("release-{n}", "state", ["canary", "stable", "rolledback"]),
+        ("log-store-{n}", "stored_in", ["s3", "gcs", "azureblob"]),
+        ("stateful-set-{n}", "located_in", ["us-east-1a", "us-east-1b", "us-east-1c"]),
+        ("product-catalog-{n}", "owned_by", ["pim-team", "erp-team", "ldap-team"]),
+        ("dispatcher-{n}", "type", ["fifo", "priority", "fair"]),
+        ("secret-store-{n}", "type", ["vault", "kms", "doppler"]),
+        ("api-service-{n}", "based_in", ["us", "eu", "apac"]),
     ]
+
+    # Lexically diverse sentence frames. For each fact we render value_a
+    # and value_b with two *different* frames so the two contradictory
+    # writes are far apart in embedding space (else dedup 409s the
+    # second). ``{pred}`` renders with underscores stripped for prose.
+    frames: list[str] = [
+        "As of the latest rollout, the {pred} of {subj} is {val}.",
+        "Records show that {subj} now has its {pred} set to {val}.",
+        "Following a recent migration, {subj} was reconfigured and its {pred} is {val}.",
+        "The operations log lists {val} as the current {pred} for {subj}.",
+        "After review the team confirmed {subj}'s {pred} to be {val}.",
+        "Per the service catalogue, {subj} carries a {pred} of {val}.",
+        "An audit recorded that the {pred} assigned to {subj} is {val}.",
+        "Configuration management pins the {pred} of {subj} at {val}.",
+    ]
+
+    def _prose(frame: str, subject: str, predicate: str, value: str) -> str:
+        return frame.format(pred=predicate.replace("_", " "), subj=subject, val=value)
 
     facts: list[_ContradictionFact] = []
     for i in range(n_facts):
@@ -147,6 +183,8 @@ def _build_facts(cfg: HarnessConfig, *, nonce: str) -> list[_ContradictionFact]:
         # Always pick two distinct values so the writes are genuinely
         # contradictory; ``random.sample`` enforces uniqueness.
         v_a, v_b = rng.sample(choices, 2)
+        # Two distinct frames per fact so the writes aren't near-duplicates.
+        frame_a, frame_b = rng.sample(frames, 2)
         for sc in scenarios:
             facts.append(
                 _ContradictionFact(
@@ -159,6 +197,8 @@ def _build_facts(cfg: HarnessConfig, *, nonce: str) -> list[_ContradictionFact]:
                     predicate=predicate,
                     value_a=v_a,
                     value_b=v_b,
+                    prose_a=_prose(frame_a, subject, predicate, v_a),
+                    prose_b=_prose(frame_b, subject, predicate, v_b),
                     scenario=sc,
                 )
             )
@@ -176,6 +216,7 @@ def _write_kwargs(
     fact: _ContradictionFact,
     agent_id: str,
     value: str,
+    content: str,
     subject_entity_id: str,
     write_mode: str | None,
 ) -> dict[str, Any]:
@@ -184,8 +225,9 @@ def _write_kwargs(
         "fleet_id": fact.fleet_id,
         "agent_id": agent_id,
         # Carry both an RDF triple (the deterministic signal) AND a
-        # natural-language version (so the row is searchable later).
-        "content": f"The {fact.predicate} of {fact.subject} is {value}.",
+        # lexically-distinct natural-language version (so the second write
+        # clears the embedding-dedup gate and the row stays searchable).
+        "content": content,
         "subject_entity_id": subject_entity_id,
         "predicate": fact.predicate,
         "object_value": value,
@@ -207,6 +249,7 @@ async def _do_write(
     agent_id: str,
     fact: _ContradictionFact,
     value: str,
+    content: str,
     subject_entity_id: str,
     write_mode: str | None,
     sink: JsonlSink,
@@ -217,6 +260,7 @@ async def _do_write(
         fact=fact,
         agent_id=agent_id,
         value=value,
+        content=content,
         subject_entity_id=subject_entity_id,
         write_mode=write_mode,
     )
@@ -342,6 +386,7 @@ async def _run_fact(
                 agent_id=fact.agent_a,
                 fact=fact,
                 value=fact.value_a,
+                content=fact.prose_a,
                 subject_entity_id=entity_id,
                 write_mode=write_mode,
                 sink=sink,
@@ -353,6 +398,7 @@ async def _run_fact(
                 agent_id=fact.agent_b,
                 fact=fact,
                 value=fact.value_b,
+                content=fact.prose_b,
                 subject_entity_id=entity_id,
                 write_mode=write_mode,
                 sink=sink,
@@ -365,6 +411,7 @@ async def _run_fact(
                     agent_id=fact.agent_a,
                     fact=fact,
                     value=fact.value_a,
+                    content=fact.prose_a,
                     subject_entity_id=entity_id,
                     write_mode=write_mode,
                     sink=sink,
@@ -375,6 +422,7 @@ async def _run_fact(
                     agent_id=fact.agent_b,
                     fact=fact,
                     value=fact.value_b,
+                    content=fact.prose_b,
                     subject_entity_id=entity_id,
                     write_mode=write_mode,
                     sink=sink,
@@ -389,8 +437,40 @@ async def _run_fact(
     if settle_delay_ms > 0:
         await asyncio.sleep(settle_delay_ms / 1000.0)
 
+    # Post-commit re-fetch — contradiction detection is ASYNC: it runs
+    # after the write response returns, so ``supersedes_id`` is never
+    # present in the write response and must be read back from the stored
+    # rows after the settle window. This GET-by-id read is the
+    # authoritative detection signal (independent of search enrichment).
+    _RESOLVED_STATUSES = {"outdated", "conflicted", "superseded"}
+
+    async def _refetch(mid: str | None) -> dict[str, Any]:
+        if not mid:
+            return {}
+        try:
+            r = await client.retrieve_memory(mid, tenant_id=fact.tenant_id)
+            return r.json if isinstance(r.json, dict) else {}
+        except MemClawError:
+            return {}
+
+    rf_first = await _refetch(first.get("memory_id"))
+    rf_second = await _refetch(second.get("memory_id"))
+    first_status = rf_first.get("status")
+    second_status = rf_second.get("status")
+    first_supersedes = rf_first.get("supersedes_id")
+    second_supersedes = rf_second.get("supersedes_id")
+    # Detected iff a supersession edge was established between the pair, or
+    # one row was flipped to a resolved (non-active) status.
+    detected = bool(first_supersedes or second_supersedes) or (
+        first_status in _RESOLVED_STATUSES or second_status in _RESOLVED_STATUSES
+    )
+
     # Resolution check — a fresh search filtered to ``active`` rows
     # should return at most one row carrying the fact_id metadata.
+    # NOTE: search depends on async embedding enrichment (a much longer
+    # window than detection), so a 0-item result here reflects enrichment
+    # lag, not necessarily resolution; ``detected`` above is the reliable
+    # signal.
     try:
         probe = await client.search_memory(
             tenant_id=fact.tenant_id,
@@ -428,11 +508,11 @@ async def _run_fact(
         "value_b": fact.value_b,
         "first_memory_id": first.get("memory_id"),
         "second_memory_id": second.get("memory_id"),
-        "second_supersedes_id": second.get("supersedes_id"),
-        "first_supersedes_id": first.get("supersedes_id"),
-        "detected": bool(
-            second.get("supersedes_id") or first.get("supersedes_id")
-        ),
+        "second_supersedes_id": second_supersedes,
+        "first_supersedes_id": first_supersedes,
+        "first_status_after": first_status,
+        "second_status_after": second_status,
+        "detected": detected,
         "n_active_after_writes": n_active,
         "active_values": active_values,
         "stale_read": stale_read,
@@ -503,7 +583,9 @@ async def run(
             sink.write("run_end", {"run_id": run_id})
 
     await run_with_client(cfg, client=client, body=_execute)
-    return _materialize_outputs(run_dir, events_path)
+    result = _materialize_outputs(run_dir, events_path)
+    result["tenant_ids"] = tenant_ids_for(cfg)
+    return result
 
 
 # ---------------------------------------------------------------------- #

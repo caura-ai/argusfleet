@@ -7,8 +7,8 @@ seed: 42
 run_label: propagation
 
 experiment:
-  # 20 facts × (3 fleet + 2 foreign) = 100 probes.
-  n_facts: 20
+  # 40 facts × (3 fleet + 2 foreign) = 200 probes.
+  n_facts: 40
   n_fleet_readers: 3
   n_foreign_readers: 2
   # Force the full enrichment pipeline so writes are searchable when the
@@ -22,7 +22,23 @@ experiment:
   poll_interval_ms: 500
   # Fraction of successfully-written facts to put through /redistribute.
   redistribute_fraction: 0.5
+  # Concurrency for the rate phase (batch probes). This phase measures
+  # visibility/leak RATES only; time-to-visibility is measured separately
+  # by the window phase below, so this cap just trades drain speed against
+  # /search 429 backoff and does not affect the latency numbers.
   max_in_flight: 8
+  # Window phase: measure the true write->visible eventual-consistency
+  # window on a small set of dedicated facts, each polled immediately and
+  # sequentially (one at a time, so the poll stream stays under the
+  # 100 req/min /search budget). poll_count > 1 here and t_visible reflects
+  # server enrichment lag rather than harness probe scheduling.
+  n_window_facts: 8
+  # 250 ms granularity: under strong mode the row is searchable almost
+  # immediately, so a coarse interval would just report "one poll
+  # interval". Sequential single-poller keeps the burst well within the
+  # /search budget (each fact resolves in a handful of polls).
+  window_poll_interval_ms: 250
+  window_timeout_ms: 120000
   tenant_id: null
   fleet_id: null
   foreign_fleet_id: null
