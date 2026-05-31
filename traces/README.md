@@ -26,3 +26,17 @@ both-admitted=90 equals 2x the N=100 run's 45 by coincidence (sibling runs give 
 - `20260530T153048Z-leakage-seed42/` — leakage: N=200 run of record
 - `20260530T153446Z-provenance-seed42/` — provenance: N=200 run of record
 - `20260530T161453Z-propagation-seed42/` — propagation: N=200 run of record
+
+## Remediation re-probe (agent-scoped GET-by-id)
+
+After the GET-by-id enforcement gap was disclosed it was remediated server-side.
+`agent_scope_leakage-2f77f908/` re-probes it at scale (4 fleets x {trust-1,
+trust-2} agent keys x 12 secrets = 96 GET-by-id probes):
+
+- trust-1 cross-fleet GET allowed: **0 / 36** (95% Wilson [0.000, 0.096]) — enforced
+- trust-1 same-fleet GET allowed: 12 / 12 — control (key works)
+- trust-2 cross-fleet GET allowed: 36 / 36 — allowed by the trust ladder
+- total leaks: **0 / 96**
+
+i.e. agent-scoped GET-by-id now applies fleet scope + the trust ladder.
+Reproduce with `scripts/agent_scope_leakage.py`.
