@@ -1,6 +1,6 @@
 # Governed Shared Memory for Multi-Agent LLM Systems
 
-**Yanki Margalit** (Caura.ai) · **Nurit Cohen-Inger** (Ben-Gurion University of the Negev)
+**Yanki Margalit**, **Erni Avram**, **Ran Taig** (Caura.ai) · **Oded Margalit**, **Nurit Cohen-Inger** (Ben-Gurion University of the Negev)
 
 ## The problem
 
