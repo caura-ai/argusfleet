@@ -31,7 +31,7 @@ a distributed-systems problem.*
 
 | Primitive | Result | Interpretation |
 |---|---|---|
-| **Leakage — access** | **164 / 164** GET-by-id retrievals across fleet boundaries (Wilson CI [0.977, 1.000]) | Tenant scope is enforced; **sub-tenant scope is not enforced on the GET path — a genuine enforcement gap, not an auth-model artifact.** The agent-scoped probe shows the gateway *resolves* the caller's agent identity and the handler then *discards* it (a trust-1 agent reads a cross-fleet row the ladder should deny). |
+| **Leakage — access** | **164 / 164** GET-by-id retrievals across fleet boundaries, *as measured* (Wilson CI [0.977, 1.000]) | At measurement time sub-tenant scope was **not** enforced on the GET path — the `get_memory` handler discarded even a resolved agent identity (a trust-1 agent read a cross-fleet row). **Disclosed and since remediated:** a re-probe shows agent-scoped GET now enforces fleet + trust (trust-1 cross-fleet **0/36**). The 164/164 was a *tenant*-scoped key, tenant-wide by design. |
 | **Leakage — search** | **0.439** cross-fleet leak rate (72/164); **0.143** miss rate (4/28) | Search partially honours the `fleet_ids` filter; embedding-similarity ranking introduces recall noise. |
 | **Provenance** | **1.00** chain completeness at depth 4 (50/50); **291 / 491 / 1076 ms** p50/p95/p99 per-hop fetch; **1.00** writer-identity accuracy | Walking `metadata.derived_from` is a viable primitive at interactive latency; identity is preserved through the storage round-trip. |
 | **Cross-fleet propagation** | **0.975** intra-fleet visibility (117/120); **0%** cross-fleet leak (0/80); **0.83 s** p50 write→visible window (tight per-fact polling, max 1.97 s) | Visibility is **effectively immediate** under strong write mode — enrichment is synchronous. |
@@ -39,15 +39,17 @@ a distributed-systems problem.*
 
 ## Four architectural findings about production memory infrastructure
 
-1. **Scope enforcement is bimodal — and the GET gap is real.** Tenant
-   boundaries are enforced uniformly; within-tenant (fleet/agent) scope is
-   enforced only partially on the search path and **not at all on direct
-   `GET`-by-id**. This is *not* an authentication-model limitation: the
-   `get_memory` handler checks only the tenant predicate and discards the
-   resolved agent identity, so even an agent-scoped credential reads a
-   peer fleet's row at a trust level the documented ladder should deny.
-   *In practice: any agent within a tenant who learns a peer's `memory_id`
-   can read the row — including another agent's agent-scoped secret.*
+1. **Scope enforcement was bimodal — the GET gap was real, and is now fixed.**
+   At measurement time, within-tenant (fleet/agent) scope was enforced only
+   partially on search and **not at all on `GET`-by-id**: the `get_memory`
+   handler discarded even a resolved agent identity, so a trust-1 agent read
+   a peer fleet's row the ladder should deny. We disclosed it; it was
+   **remediated server-side during the study** — a scaled re-probe confirms
+   agent-scoped `GET` now enforces fleet scope + the trust ladder (trust-1
+   cross-fleet **0/36**, trust-2 36/36, returned as 404). The bulk 164/164
+   was a *tenant*-scoped key (tenant-wide by design). The formalism flagged
+   the Inv-Scope violation, the harness localised it to one handler, and the
+   fix was exactly the predicate the search path already carried.
 2. **Deduplication starves contradiction detection.** A semantic
    near-duplicate gate rejects writes by embedding similarity *synchronously,
    pre-commit*, before the structural contradiction detector runs

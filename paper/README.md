@@ -90,10 +90,12 @@ in the paper drift from the latest run, regenerate the report and
 update Table 1.
 
 The exact event traces backing the published (N=200) numbers are committed
-under `../traces/` (commit `2c55bb5`) — `events.jsonl` + `summary.csv` for
-each run-of-record plus the four independent N=200 contradiction runs — so
-the tables and figures regenerate from a frozen, verifiable source rather
-than a transient local run. `../outputs/runs/` itself is gitignored.
+under `../traces/` — `events.jsonl` + `summary.csv` for each run-of-record,
+the four independent N=200 contradiction runs, and the agent-scoped GET-by-id
+re-probe that documents the leakage-gap remediation (`agent_scope_leakage-*`,
+0/36 trust-1 cross-fleet). See `../traces/README.md` for the manifest. The
+tables and figures regenerate from this frozen source rather than a transient
+local run; `../outputs/runs/` itself is gitignored.
 
 ## Refreshing figures after a re-run
 
