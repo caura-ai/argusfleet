@@ -38,8 +38,8 @@
 \footnotesize
 
 {\scriptsize
-Yanki Margalit (Caura.ai) \,$\cdot$\,
-Nurit Cohen-Inger (Ben-Gurion University of the Negev)
+Yanki Margalit, Erni Avram, Ran Taig (Caura.ai) \,$\cdot$\,
+Oded Margalit, Nurit Cohen-Inger (Ben-Gurion University of the Negev)
 }
 
 \vspace{0.25em}
@@ -59,10 +59,10 @@ service.
 
 \textbf{Architectural findings}
 \begin{enumerate}\setlength\itemsep{0.1em}\setlength\parskip{0pt}\setlength\leftmargin{1em}
-  \item \textcolor{bad}{\textbf{Scope enforcement is bimodal.}}
-        Tenant uniformly; sub-tenant not on \texttt{GET}-by-id --- a
-        \emph{genuine enforcement gap} (the handler discards even a
-        resolved agent identity).
+  \item \textcolor{warn}{\textbf{Scope enforcement was bimodal} (now fixed).}
+        Sub-tenant scope was unenforced on \texttt{GET}-by-id (handler
+        discarded a resolved agent identity); disclosed \&
+        \textcolor{good}{remediated}.
   \item \textcolor{warn}{\textbf{Dedup starves contradiction detection.}}
         Synchronous embedding \texttt{409}s pre-empt the async detector.
         Detector is sound (90/90 when both land); the \emph{ordering} defeats it.
@@ -89,7 +89,8 @@ service.
 \toprule
 Primitive & Signal & Result \\
 \midrule
-\textbf{Leakage}       & access leak, GET-by-id ($n=164$)      & \textcolor{bad}{\textbf{164 / 164}} \\
+\textbf{Leakage}       & access leak, GET-by-id (at meas.)     & \textcolor{warn}{\textbf{164 / 164}} \\
+                       & \quad after remediation (trust-1 xfleet) & \textcolor{good}{\textbf{0 / 36}} \\
                        & search leak rate                      & 0.439 \\
 \midrule
 \textbf{Provenance}    & chain completeness, depth 4           & \textcolor{good}{\textbf{1.00}} \\
@@ -109,8 +110,9 @@ Primitive & Signal & Result \\
 
 \textbf{Take-aways}
 \begin{itemize}\setlength\itemsep{0.05em}\setlength\parskip{0pt}\setlength\leftmargin{1em}
-  \item GET-by-id: \textcolor{bad}{164/164 cross-fleet leak} --- a real
-        enforcement gap, not an auth artifact.
+  \item GET-by-id gap (164/164 at meas.) ---
+        \textcolor{good}{disclosed \& remediated}; agent-scoped GET now
+        enforces fleet+trust (0/36).
   \item Provenance: \textcolor{good}{sub-second}, \textcolor{good}{1.00 completeness + accuracy}.
   \item Propagation: \textcolor{good}{0 leaks at $n=80$};
         \textcolor{good}{$\sim$0.8 s window} (synchronous enrichment).
