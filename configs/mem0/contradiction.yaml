@@ -1,0 +1,41 @@
+# Temporal contradiction experiment — mem0 backend.
+#
+# mem0 has no structural (RDF-triple) contradiction detector; its
+# conflict handling is the LLM update pipeline that runs on infer=True
+# writes (write_mode: strong maps to infer=True). Writes are processed
+# asynchronously (~4–15 s observed); the client blocks each strong write
+# on a metadata-marker poll until the extracted row materialises, so the
+# sequential scenario genuinely orders A before B. Detection is
+# adjudicated by content change / row deletion (see contradiction.py).
+
+backend: mem0
+request_timeout_s: 120
+max_retries: 3
+seed: 42
+run_label: contradiction
+
+experiment:
+  # 30 facts × 2 scenarios = 60 fact-runs = 120 LLM-processed writes.
+  # Sized down from MemClaw's 100 facts: every infer=True write is a
+  # background LLM job on mem0's side (~5–15 s each) and the platform
+  # nondeterminism argues for keeping a run under ~20 minutes. Scale up
+  # for tighter CIs once quota headroom is confirmed.
+  n_facts: 30
+  scenarios: ["sequential", "concurrent"]
+  # The strong-write marker poll already blocks until A materialises;
+  # this extra pause is just breathing room before B is queued.
+  sequential_delay_ms: 500
+  # After B materialises, any UPDATE/DELETE of A has usually already
+  # been applied as part of the same background job; 10 s covers stragglers.
+  settle_delay_ms: 10000
+  write_mode: strong
+  max_in_flight: 4
+  # Detection is adjudicated by an exact metadata-filtered get-all
+  # enumeration per fact-run (see contradiction.py non-structural path),
+  # NOT by marker polling, so keep the marker poll short — it only helps
+  # order the sequential pair, and every poll is a metered retrieval.
+  mem0_infer_poll_interval_s: 2.0
+  mem0_infer_poll_timeout_s: 10.0
+  mem0_min_read_interval_ms: 350
+  tenant_id: null   # null → derived from seed (free-form user_id on mem0)
+  fleet_id: null

@@ -16,7 +16,6 @@ import logging
 import time
 import uuid
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
 from typing import Any, AsyncIterator
 
 import httpx
@@ -27,36 +26,30 @@ from tenacity import (
     wait_exponential,
 )
 
+from argusfleet.harness.backend import (
+    BackendCapabilities,
+    BackendError,
+    BackendResponse,
+)
+
 logger = logging.getLogger(__name__)
 
 TRACE_HEADER = "X-Trace-Id"
 API_KEY_HEADER = "X-API-Key"
 
 
-class MemClawError(RuntimeError):
-    """Raised when the server returns a non-2xx response after retries."""
+class MemClawError(BackendError):
+    """Raised when the server returns a non-2xx response after retries.
 
-    def __init__(self, status_code: int, message: str, trace_id: str | None = None) -> None:
-        super().__init__(f"[{status_code}] {message} (trace={trace_id})")
-        self.status_code = status_code
-        self.message = message
-        self.trace_id = trace_id
-
-
-@dataclass(slots=True)
-class MemClawResponse:
-    """Wire response + timing envelope.
-
-    Experiments store these directly into JSONL logs so latency analysis
-    can be reproduced from artifacts alone, without re-hitting the server.
+    Subclasses the shared :class:`BackendError` so backend-agnostic code
+    (experiments, CLI cleanup) can catch one exception type regardless of
+    which platform raised it.
     """
 
-    status_code: int
-    json: Any
-    latency_ms: float
-    trace_id: str
-    attempt: int = 1
-    extra: dict[str, Any] = field(default_factory=dict)
+
+# Historical name — experiments and tests reference ``MemClawResponse``;
+# the shape now lives in ``backend.py`` and is shared across backends.
+MemClawResponse = BackendResponse
 
 
 # Retry on transient transport errors and 5xx — but never on 4xx, since
@@ -131,6 +124,8 @@ class MemClawClient:
     max_retries:
         Maximum number of attempts per call (1 = no retry).
     """
+
+    capabilities = BackendCapabilities(name="memclaw")
 
     def __init__(
         self,
@@ -320,6 +315,22 @@ class MemClawClient:
             body["attributes"] = attributes
         return await self._request(
             "POST", "/entities/upsert", json=body, rate_limit=True
+        )
+
+    async def list_memories(
+        self,
+        *,
+        tenant_id: str,
+        metadata_filter: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> MemClawResponse:
+        """Not used against MemClaw: contradiction detection here rides on
+        the structural supersession edge (``capabilities.structural_
+        contradiction`` is True), so the enumeration-based fallback this
+        method backs is never invoked. Present only to satisfy the
+        MemoryBackend protocol."""
+        raise MemClawError(
+            501, "list_memories is only used on content-driven backends"
         )
 
     async def delete_all_memories(

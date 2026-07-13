@@ -25,6 +25,7 @@ KNOWN_EXPERIMENTS = ("leakage", "contradiction", "provenance", "propagation")
 @dataclass(slots=True)
 class _RunInfo:
     experiment: str
+    backend: str
     run_dir: Path
     started_at: str | None
     summary: dict[str, Any]
@@ -62,13 +63,19 @@ def _read_summary(summary_path: Path) -> dict[str, Any]:
         return {}
 
 
-def _discover_runs(outputs_dir: Path) -> dict[str, _RunInfo]:
-    """Return ``{experiment: most-recent _RunInfo}``."""
+def _discover_runs(outputs_dir: Path) -> dict[tuple[str, str], _RunInfo]:
+    """Return ``{(backend, experiment): most-recent _RunInfo}``.
+
+    Keyed on the backend too so a mem0 run never shadows a MemClaw run
+    of the same experiment (or vice versa) — the report renders one
+    section per backend. Runs that predate the backend field default to
+    ``memclaw``.
+    """
     runs_root = outputs_dir / "runs"
     if not runs_root.exists():
         return {}
 
-    latest: dict[str, _RunInfo] = {}
+    latest: dict[tuple[str, str], _RunInfo] = {}
     for run_dir in runs_root.iterdir():
         if not run_dir.is_dir():
             continue
@@ -80,16 +87,19 @@ def _discover_runs(outputs_dir: Path) -> dict[str, _RunInfo]:
         experiment = data.get("experiment")
         if experiment not in KNOWN_EXPERIMENTS:
             continue
+        backend = str(data.get("backend") or "memclaw")
         info = _RunInfo(
             experiment=experiment,
+            backend=backend,
             run_dir=run_dir,
             started_at=start.get("ts"),
             summary=_read_summary(run_dir / "summary.csv"),
             plots=sorted(run_dir.glob("*.png")),
         )
-        existing = latest.get(experiment)
+        key = (backend, experiment)
+        existing = latest.get(key)
         if existing is None or (info.started_at or "") > (existing.started_at or ""):
-            latest[experiment] = info
+            latest[key] = info
     return latest
 
 
@@ -157,8 +167,12 @@ def _format_value(v: Any) -> str:
     return str(v)
 
 
-def render_markdown(latest: dict[str, _RunInfo]) -> str:
-    """Render a consolidated markdown report from the latest runs."""
+def render_markdown(latest: dict[tuple[str, str], _RunInfo]) -> str:
+    """Render a consolidated markdown report from the latest runs.
+
+    One section block per backend that has any runs, so cross-platform
+    results sit side by side without shadowing each other.
+    """
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     lines: list[str] = [
         "# ArgusFleet — Latest Results",
@@ -174,51 +188,59 @@ def render_markdown(latest: dict[str, _RunInfo]) -> str:
         lines.append("```")
         return "\n".join(lines)
 
-    # Top-level headline table — one row per experiment.
+    backends = sorted(
+        {b for (b, _) in latest},
+        key=lambda b: (b != "memclaw", b),  # memclaw first, then alphabetical
+    )
+
+    # Top-level headline table — one row per (backend, experiment).
     lines.append("## Headline")
     lines.append("")
-    lines.append("| Experiment | Run directory | Started (UTC) |")
-    lines.append("| --- | --- | --- |")
-    for exp in KNOWN_EXPERIMENTS:
-        info = latest.get(exp)
-        if info is None:
-            lines.append(f"| {exp} | _no run yet_ | — |")
-            continue
-        lines.append(
-            f"| {exp} | `{info.run_dir.name}` | {info.started_at or '—'} |"
-        )
+    lines.append("| Backend | Experiment | Run directory | Started (UTC) |")
+    lines.append("| --- | --- | --- | --- |")
+    for backend in backends:
+        for exp in KNOWN_EXPERIMENTS:
+            info = latest.get((backend, exp))
+            if info is None:
+                lines.append(f"| {backend} | {exp} | _no run yet_ | — |")
+                continue
+            lines.append(
+                f"| {backend} | {exp} | `{info.run_dir.name}` | {info.started_at or '—'} |"
+            )
     lines.append("")
 
-    # Per-experiment headline metrics + plot links.
-    for exp in KNOWN_EXPERIMENTS:
-        info = latest.get(exp)
-        lines.append(f"## {exp}")
-        lines.append("")
-        if info is None:
-            lines.append("_No run yet._")
+    # Per-(backend, experiment) headline metrics + plot links.
+    for backend in backends:
+        for exp in KNOWN_EXPERIMENTS:
+            info = latest.get((backend, exp))
+            title = exp if len(backends) == 1 else f"{exp} — {backend}"
+            lines.append(f"## {title}")
             lines.append("")
-            continue
-        lines.append(f"Run dir: `{info.run_dir}`")
-        lines.append("")
-        lines.append("| Metric | Value |")
-        lines.append("| --- | ---: |")
-        wanted = _HEADLINE_METRICS.get(exp, [])
-        seen = set()
-        for metric in wanted:
-            if metric in info.summary:
-                lines.append(f"| {metric} | {_format_value(info.summary[metric])} |")
-                seen.add(metric)
-        # Append any non-headline metric afterwards, in original order.
-        for metric, value in info.summary.items():
-            if metric in seen:
+            if info is None:
+                lines.append("_No run yet._")
+                lines.append("")
                 continue
-            lines.append(f"| {metric} | {_format_value(value)} |")
-        lines.append("")
-        if info.plots:
-            lines.append("Plots:")
-            for p in info.plots:
-                lines.append(f"- `{p.name}` (`{p}`)")
+            lines.append(f"Run dir: `{info.run_dir}`")
             lines.append("")
+            lines.append("| Metric | Value |")
+            lines.append("| --- | ---: |")
+            wanted = _HEADLINE_METRICS.get(exp, [])
+            seen = set()
+            for metric in wanted:
+                if metric in info.summary:
+                    lines.append(f"| {metric} | {_format_value(info.summary[metric])} |")
+                    seen.add(metric)
+            # Append any non-headline metric afterwards, in original order.
+            for metric, value in info.summary.items():
+                if metric in seen:
+                    continue
+                lines.append(f"| {metric} | {_format_value(value)} |")
+            lines.append("")
+            if info.plots:
+                lines.append("Plots:")
+                for p in info.plots:
+                    lines.append(f"- `{p.name}` (`{p}`)")
+                lines.append("")
     return "\n".join(lines)
 
 
@@ -242,21 +264,22 @@ def write_report(
     copied: list[str] = []
     if copy_plots:
         for info in latest.values():
+            target = report_dir / f"{info.backend}-{info.experiment}"
             for plot in info.plots:
-                target = report_dir / f"{info.experiment}-{plot.name}"
-                shutil.copy2(plot, target)
-                copied.append(str(target))
+                shutil.copy2(plot, report_dir / f"{target.name}-{plot.name}")
+                copied.append(str(report_dir / f"{target.name}-{plot.name}"))
     return {
         "report_path": str(report_path),
         "report_dir": str(report_dir),
         "markdown": md,
         "experiments": {
-            exp: {
+            f"{backend}/{exp}": {
                 "run_dir": str(info.run_dir),
+                "backend": info.backend,
                 "started_at": info.started_at,
                 "summary": info.summary,
             }
-            for exp, info in latest.items()
+            for (backend, exp), info in latest.items()
         },
         "copied_plots": copied,
     }

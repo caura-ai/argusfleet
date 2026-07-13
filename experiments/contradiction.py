@@ -45,7 +45,7 @@ from typing import Any
 import pandas as pd
 
 from argusfleet.experiments._common import bar_chart_from_frame
-from argusfleet.harness.client import MemClawClient, MemClawError
+from argusfleet.harness.backend import BackendError, MemoryBackend
 from argusfleet.harness.config import HarnessConfig
 from argusfleet.harness.metrics import (
     events_to_frame,
@@ -244,7 +244,7 @@ def _write_kwargs(
 
 
 async def _do_write(
-    client: MemClawClient,
+    client: MemoryBackend,
     *,
     agent_id: str,
     fact: _ContradictionFact,
@@ -281,13 +281,19 @@ async def _do_write(
             ),
             "n_contradictions_reported": len(contradictions),
             "contradictions": contradictions,
+            # Snapshot of the stored content at write time. Backends
+            # without structural detection (mem0) resolve conflicts by
+            # mutating/deleting rows, so the post-settle adjudication
+            # compares against this snapshot.
+            "content_at_write": payload.get("content"),
+            "materialize_ms": resp.extra.get("materialize_ms"),
             "latency_ms": resp.latency_ms,
             "status_code": resp.status_code,
             "trace_id": resp.trace_id,
         }
         sink.write("write", result)
         return result
-    except MemClawError as e:
+    except BackendError as e:
         result = {
             "fact_id": fact.fact_id,
             "scenario": fact.scenario,
@@ -309,7 +315,7 @@ async def _do_write(
 
 
 async def _run_fact(
-    client: MemClawClient,
+    client: MemoryBackend,
     fact: _ContradictionFact,
     sink: JsonlSink,
     *,
@@ -319,45 +325,51 @@ async def _run_fact(
     rate_gate: asyncio.Semaphore,
 ) -> dict[str, Any]:
     """Write both contradictory values, then verify resolution."""
+    caps = client.capabilities
     async with rate_gate:
         # Upsert the subject entity first — both contradictory writes
         # point at this UUID via ``subject_entity_id``, which is what
         # routes the second write into the structural-contradiction
         # codepath instead of the embedding-similarity dedup gate.
-        try:
-            ent_resp = await client.upsert_entity(
-                tenant_id=fact.tenant_id,
-                fleet_id=fact.fleet_id,
-                entity_type="system_resource",
-                canonical_name=fact.subject,
-                attributes={"experiment": "contradiction", "fact_id": fact.fact_id},
-            )
-            entity_id = (ent_resp.json or {}).get("id") if isinstance(ent_resp.json, dict) else None
-            sink.write(
-                "entity_upsert",
-                {
-                    "fact_id": fact.fact_id,
-                    "subject": fact.subject,
-                    "entity_id": entity_id,
-                    "latency_ms": ent_resp.latency_ms,
-                    "trace_id": ent_resp.trace_id,
-                },
-            )
-        except MemClawError as e:
-            sink.write(
-                "entity_upsert",
-                {
-                    "fact_id": fact.fact_id,
-                    "subject": fact.subject,
-                    "entity_id": None,
-                    "error": e.message,
-                    "status_code": e.status_code,
-                    "trace_id": e.trace_id,
-                },
-            )
-            entity_id = None
+        # Backends without an entity primitive (capabilities.entities is
+        # False, e.g. mem0) skip the upsert: their conflict handling is
+        # content-driven, so the subject string itself is the reference.
+        entity_id: str | None = None
+        if caps.entities:
+            try:
+                ent_resp = await client.upsert_entity(
+                    tenant_id=fact.tenant_id,
+                    fleet_id=fact.fleet_id,
+                    entity_type="system_resource",
+                    canonical_name=fact.subject,
+                    attributes={"experiment": "contradiction", "fact_id": fact.fact_id},
+                )
+                entity_id = (ent_resp.json or {}).get("id") if isinstance(ent_resp.json, dict) else None
+                sink.write(
+                    "entity_upsert",
+                    {
+                        "fact_id": fact.fact_id,
+                        "subject": fact.subject,
+                        "entity_id": entity_id,
+                        "latency_ms": ent_resp.latency_ms,
+                        "trace_id": ent_resp.trace_id,
+                    },
+                )
+            except BackendError as e:
+                sink.write(
+                    "entity_upsert",
+                    {
+                        "fact_id": fact.fact_id,
+                        "subject": fact.subject,
+                        "entity_id": None,
+                        "error": e.message,
+                        "status_code": e.status_code,
+                        "trace_id": e.trace_id,
+                    },
+                )
+                entity_id = None
 
-        if entity_id is None:
+        if caps.entities and entity_id is None:
             # Without an entity UUID we can't trigger the structural
             # detector; record a placeholder resolution so the summary
             # still has a row for this fact-run and the cause is visible.
@@ -380,6 +392,11 @@ async def _run_fact(
             sink.write("resolution", row)
             return row
 
+        # What the writes reference as their subject: the entity UUID when
+        # the backend has entities, else the subject string (recorded in
+        # write metadata for the artifact trail).
+        subject_ref = entity_id if caps.entities else fact.subject
+
         if fact.scenario == "sequential":
             first = await _do_write(
                 client,
@@ -387,7 +404,7 @@ async def _run_fact(
                 fact=fact,
                 value=fact.value_a,
                 content=fact.prose_a,
-                subject_entity_id=entity_id,
+                subject_entity_id=subject_ref,
                 write_mode=write_mode,
                 sink=sink,
                 sequence=0,
@@ -399,7 +416,7 @@ async def _run_fact(
                 fact=fact,
                 value=fact.value_b,
                 content=fact.prose_b,
-                subject_entity_id=entity_id,
+                subject_entity_id=subject_ref,
                 write_mode=write_mode,
                 sink=sink,
                 sequence=1,
@@ -412,7 +429,7 @@ async def _run_fact(
                     fact=fact,
                     value=fact.value_a,
                     content=fact.prose_a,
-                    subject_entity_id=entity_id,
+                    subject_entity_id=subject_ref,
                     write_mode=write_mode,
                     sink=sink,
                     sequence=0,
@@ -423,80 +440,117 @@ async def _run_fact(
                     fact=fact,
                     value=fact.value_b,
                     content=fact.prose_b,
-                    subject_entity_id=entity_id,
+                    subject_entity_id=subject_ref,
                     write_mode=write_mode,
                     sink=sink,
                     sequence=1,
                 ),
             )
 
-    # Let the server settle so the supersession indexing lands before
-    # we ask for ``active`` rows. Without this the resolution check
-    # races against the contradiction-detection pipeline and reports
-    # false positives.
+    # Let the async pipeline settle before adjudicating: on structural
+    # backends this lets supersession indexing land before the ``active``
+    # re-fetch; on content-driven backends it lets the LLM ADD/UPDATE/
+    # DELETE pipeline finish before the metadata enumeration.
     if settle_delay_ms > 0:
         await asyncio.sleep(settle_delay_ms / 1000.0)
 
-    # Post-commit re-fetch — contradiction detection is ASYNC: it runs
-    # after the write response returns, so ``supersedes_id`` is never
-    # present in the write response and must be read back from the stored
-    # rows after the settle window. This GET-by-id read is the
-    # authoritative detection signal (independent of search enrichment).
-    _RESOLVED_STATUSES = {"outdated", "conflicted", "superseded"}
+    first_supersedes = second_supersedes = None
+    first_status = second_status = None
+    probe_latency = None
+    probe_error = None
 
-    async def _refetch(mid: str | None) -> dict[str, Any]:
-        if not mid:
-            return {}
-        try:
-            r = await client.retrieve_memory(mid, tenant_id=fact.tenant_id)
-            return r.json if isinstance(r.json, dict) else {}
-        except MemClawError:
-            return {}
+    if caps.structural_contradiction:
+        # --- Structural backends (MemClaw) ---------------------------
+        # Contradiction detection is ASYNC/post-commit: ``supersedes_id``
+        # is never in the write response and must be read back by GET-by-id
+        # after the settle window. This re-fetch is the authoritative
+        # detection signal (independent of search enrichment).
+        _RESOLVED_STATUSES = {"outdated", "conflicted", "superseded"}
 
-    rf_first = await _refetch(first.get("memory_id"))
-    rf_second = await _refetch(second.get("memory_id"))
-    first_status = rf_first.get("status")
-    second_status = rf_second.get("status")
-    first_supersedes = rf_first.get("supersedes_id")
-    second_supersedes = rf_second.get("supersedes_id")
-    # Detected iff a supersession edge was established between the pair, or
-    # one row was flipped to a resolved (non-active) status.
-    detected = bool(first_supersedes or second_supersedes) or (
-        first_status in _RESOLVED_STATUSES or second_status in _RESOLVED_STATUSES
-    )
+        async def _refetch(mid: str | None) -> dict[str, Any]:
+            if not mid:
+                return {}
+            try:
+                r = await client.retrieve_memory(mid, tenant_id=fact.tenant_id)
+                return r.json if isinstance(r.json, dict) else {}
+            except BackendError:
+                return {}
 
-    # Resolution check — a fresh search filtered to ``active`` rows
-    # should return at most one row carrying the fact_id metadata.
-    # NOTE: search depends on async embedding enrichment (a much longer
-    # window than detection), so a 0-item result here reflects enrichment
-    # lag, not necessarily resolution; ``detected`` above is the reliable
-    # signal.
-    try:
-        probe = await client.search_memory(
-            tenant_id=fact.tenant_id,
-            fleet_ids=[fact.fleet_id],
-            query=fact.subject,
-            top_k=10,
-            status_filter="active",
+        rf_first = await _refetch(first.get("memory_id"))
+        rf_second = await _refetch(second.get("memory_id"))
+        first_status = rf_first.get("status")
+        second_status = rf_second.get("status")
+        first_supersedes = rf_first.get("supersedes_id")
+        second_supersedes = rf_second.get("supersedes_id")
+        detected = bool(first_supersedes or second_supersedes) or (
+            first_status in _RESOLVED_STATUSES or second_status in _RESOLVED_STATUSES
         )
-        items = (probe.json or {}).get("items") if isinstance(probe.json, dict) else []
-        items = items or []
-        active_values = [
-            it.get("metadata", {}).get("asserted_value")
-            for it in items
-            if isinstance(it, dict)
-            and it.get("metadata", {}).get("fact_id") == fact.fact_id
-        ]
-        n_active = len(active_values)
+
+        # Stale-read check: a fresh ``active``-filtered search for the
+        # subject should return at most one row carrying the fact_id.
+        try:
+            probe = await client.search_memory(
+                tenant_id=fact.tenant_id,
+                fleet_ids=[fact.fleet_id],
+                query=fact.subject,
+                top_k=10,
+                status_filter="active",
+            )
+            items = (probe.json or {}).get("items") if isinstance(probe.json, dict) else []
+            active_values = [
+                it.get("metadata", {}).get("asserted_value")
+                for it in (items or [])
+                if isinstance(it, dict)
+                and it.get("metadata", {}).get("fact_id") == fact.fact_id
+            ]
+            probe_latency = probe.latency_ms
+        except BackendError as e:
+            active_values = []
+            probe_error = e.message
+    else:
+        # --- Content-driven backends (mem0) --------------------------
+        # No supersession edge, no lifecycle status, and marker-based
+        # re-fetch is unreliable under the LLM ADD/UPDATE/DELETE pipeline.
+        # Enumerate every row carrying this fact via an exact
+        # metadata-filtered get-all (no embedding ranking, one retrieval
+        # call) and read the outcome off the surviving object values.
+        # ``resolved`` (detected) = the platform collapsed the pair to a
+        # single asserted value (it superseded or merged); ``persists``
+        # (stale) = both contradictory values remain simultaneously
+        # retrievable, an Inv-Time exposure.
+        try:
+            listing = await client.list_memories(
+                tenant_id=fact.tenant_id,
+                metadata_filter={"fact_id": fact.fact_id},
+            )
+            items = (listing.json or {}).get("items") if isinstance(listing.json, dict) else []
+            active_values = [
+                it.get("metadata", {}).get("asserted_value")
+                for it in (items or [])
+                if isinstance(it, dict)
+                and it.get("metadata", {}).get("fact_id") == fact.fact_id
+            ]
+            probe_latency = listing.latency_ms
+        except BackendError as e:
+            active_values = []
+            probe_error = e.message
+        distinct_values = {v for v in active_values if v is not None}
+        # ``resolved`` (detected) = the fact settles to a single coherent
+        # object value; ``persists`` (stale) = two or more contradictory
+        # values remain simultaneously retrievable (an Inv-Time exposure).
+        # Caveat, noted in the paper: a store that resolves by DELETING
+        # the loser is indistinguishable here from one where the second
+        # write was never admitted — both leave one value. We therefore
+        # lead with the persistence rate (unambiguous) and read detection
+        # as its complement over fact-runs that produced any row.
+        detected = len(distinct_values) == 1
+
+    n_active = len(active_values)
+    if caps.structural_contradiction:
         stale_read = n_active > 1
-        probe_latency = probe.latency_ms
-        probe_error = None
-    except MemClawError as e:
-        active_values = []
-        n_active = 0
-        stale_read = False
-        probe_latency = None
-        probe_error = e.message
+    else:
+        # Both contradictory values simultaneously present.
+        stale_read = len({v for v in active_values if v is not None}) > 1
 
     row = {
         "fact_id": fact.fact_id,
@@ -533,7 +587,7 @@ async def _run_fact(
 async def run(
     cfg: HarnessConfig,
     *,
-    client: MemClawClient | None = None,
+    client: MemoryBackend | None = None,
 ) -> dict[str, Any]:
     """Execute the contradiction experiment end-to-end."""
     run_id, run_dir, events_path = make_run_dir(cfg, "contradiction")
@@ -553,7 +607,7 @@ async def run(
         write_mode,
     )
 
-    async def _execute(c: MemClawClient) -> None:
+    async def _execute(c: MemoryBackend) -> None:
         with open_sink_with_envelope(
             events_path,
             run_id=run_id,

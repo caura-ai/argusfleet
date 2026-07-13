@@ -30,8 +30,13 @@ def _default_env_file() -> Path:
 class HarnessConfig(BaseModel):
     """Runtime knobs shared by every experiment."""
 
+    # Which memory platform to exercise: "memclaw" (default) or "mem0".
+    backend: str = "memclaw"
     base_url: str = Field(default="https://memclaw.net")
     api_key: str | None = None
+    # mem0 platform credentials (used when backend == "mem0").
+    mem0_base_url: str = Field(default="https://api.mem0.ai")
+    mem0_api_key: str | None = None
     request_timeout_s: float = 30.0
     max_retries: int = 3
     # Minimum gap between writes, enforced client-side by the write rate
@@ -73,13 +78,14 @@ def load_config(
             data = yaml.safe_load(fh) or {}
 
     env_map = {
+        "backend": os.getenv("ARGUSFLEET_BACKEND"),
         "base_url": os.getenv("MEMCLAW_BASE_URL"),
         "api_key": os.getenv("MEMCLAW_API_KEY"),
+        "mem0_base_url": os.getenv("MEM0_BASE_URL"),
+        "mem0_api_key": os.getenv("MEM0_API_KEY"),
         "seed": os.getenv("ARGUSFLEET_SEED"),
         "output_dir": os.getenv("ARGUSFLEET_OUTPUT_DIR"),
         "run_label": os.getenv("ARGUSFLEET_RUN_LABEL"),
-        "tenant_ids": os.getenv("MEMCLAW_TENANT_ID")
-        or os.getenv("MEMCLAW_TENANT_IDS"),
     }
     for k, v in env_map.items():
         # Treat a set-but-empty env var (e.g. the shipped ``.env.example``'s
@@ -89,6 +95,22 @@ def load_config(
             data[k] = v
     if overrides:
         data.update(overrides)
+
+    # Tenant env vars are backend-specific: MEMCLAW_TENANT_ID names MemClaw
+    # tenants the key is authorised for and must not bleed into a mem0 run
+    # as user_ids (and vice versa). Resolve the backend first, then apply
+    # the matching env var — YAML tenant_ids and explicit overrides are
+    # untouched either way. With no matching env var, each experiment falls
+    # back to its seed-synthesised IDs (which work on mem0, where nothing
+    # below the project key is enforced).
+    backend = str(data.get("backend", "memclaw")).lower()
+    if not (overrides and "tenant_ids" in overrides):
+        if backend == "mem0":
+            tenant_env = os.getenv("MEM0_USER_IDS") or os.getenv("MEM0_USER_ID")
+        else:
+            tenant_env = os.getenv("MEMCLAW_TENANT_ID") or os.getenv("MEMCLAW_TENANT_IDS")
+        if tenant_env:
+            data["tenant_ids"] = tenant_env
 
     if "seed" in data and data["seed"] is not None:
         data["seed"] = int(data["seed"])

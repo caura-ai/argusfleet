@@ -1,0 +1,479 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MemClaw vs Mem0 — Governed Memory Benchmark</title>
+<style>html,body{margin:0}</style>
+</head>
+<body>
+<style>
+  :root {
+    /* cool slate neutrals, hue-biased toward the cobalt-free amber accent's complement */
+    --ground: #f4f6f9;
+    --surface: #ffffff;
+    --surface-2: #eef1f6;
+    --hair: #d9dee7;
+    --ink: #10151d;
+    --ink-2: #414b59;
+    --ink-3: #6b7688;
+    --accent: #b9741a;        /* amber, used sparingly — the single bold choice */
+    --accent-soft: #f3e4cd;
+    --pass: #1f8a4c;
+    --pass-soft: #dcefe2;
+    --fail: #c0392f;
+    --fail-soft: #f6dedb;
+    --shadow: 0 1px 2px rgba(16,21,29,.06), 0 8px 24px rgba(16,21,29,.05);
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", "Segoe UI Mono", Menlo, Consolas, monospace;
+    --sans: ui-sans-serif, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ground: #0b0f16;
+      --surface: #121822;
+      --surface-2: #171f2b;
+      --hair: #263041;
+      --ink: #eef2f8;
+      --ink-2: #aab4c4;
+      --ink-3: #71809a;
+      --accent: #e8a94a;
+      --accent-soft: #33270f;
+      --pass: #46c072;
+      --pass-soft: #123120;
+      --fail: #f0685c;
+      --fail-soft: #331714;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="light"] {
+    --ground: #f4f6f9; --surface: #ffffff; --surface-2: #eef1f6; --hair: #d9dee7;
+    --ink: #10151d; --ink-2: #414b59; --ink-3: #6b7688;
+    --accent: #b9741a; --accent-soft: #f3e4cd;
+    --pass: #1f8a4c; --pass-soft: #dcefe2; --fail: #c0392f; --fail-soft: #f6dedb;
+    --shadow: 0 1px 2px rgba(16,21,29,.06), 0 8px 24px rgba(16,21,29,.05);
+  }
+  :root[data-theme="dark"] {
+    --ground: #0b0f16; --surface: #121822; --surface-2: #171f2b; --hair: #263041;
+    --ink: #eef2f8; --ink-2: #aab4c4; --ink-3: #71809a;
+    --accent: #e8a94a; --accent-soft: #33270f;
+    --pass: #46c072; --pass-soft: #123120; --fail: #f0685c; --fail-soft: #331714;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.35);
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; }
+  .page {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    padding: clamp(20px, 5vw, 72px) clamp(16px, 5vw, 40px) 64px;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 18px;
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  }
+  .eyebrow .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); display: inline-block; }
+  .eyebrow .sep { color: var(--ink-3); }
+
+  h1 {
+    font-size: clamp(30px, 5.4vw, 56px);
+    line-height: 1.04;
+    letter-spacing: -.02em;
+    font-weight: 800;
+    text-wrap: balance;
+    margin: 0 0 20px;
+    max-width: 16ch;
+  }
+  h1 .amber { color: var(--accent); }
+  .lede {
+    font-size: clamp(16px, 2.1vw, 20px);
+    color: var(--ink-2);
+    max-width: 62ch;
+    margin: 0 0 8px;
+  }
+
+  section { margin-top: clamp(44px, 7vw, 80px); }
+  .sec-head {
+    display: flex; align-items: baseline; gap: 14px;
+    border-bottom: 1px solid var(--hair);
+    padding-bottom: 12px; margin-bottom: 26px;
+    flex-wrap: wrap;
+  }
+  .sec-head h2 {
+    font-size: clamp(19px, 2.4vw, 24px); font-weight: 750;
+    letter-spacing: -.01em; margin: 0;
+  }
+  .sec-head .kicker {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--ink-3);
+  }
+  .sec-head .note { margin-left: auto; font-size: 13px; color: var(--ink-3); }
+
+  /* hero headline stat */
+  .hero-stat {
+    margin-top: 34px;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 1px;
+    background: var(--hair);
+    border: 1px solid var(--hair); border-radius: 14px; overflow: hidden;
+    box-shadow: var(--shadow);
+  }
+  .hero-cell { background: var(--surface); padding: 24px 26px; }
+  .hero-cell .who {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--ink-3); margin-bottom: 12px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .hero-cell .big {
+    font-family: var(--mono); font-variant-numeric: tabular-nums;
+    font-size: clamp(34px, 6vw, 52px); font-weight: 700; letter-spacing: -.02em;
+    line-height: 1; margin-bottom: 10px;
+  }
+  .hero-cell .big.good { color: var(--pass); }
+  .hero-cell .big.bad { color: var(--fail); }
+  .hero-cell .cap { font-size: 14px; color: var(--ink-2); }
+  .hero-cell.win { position: relative; }
+  .badge {
+    display: inline-block; font-family: var(--mono); font-size: 10px;
+    letter-spacing: .12em; text-transform: uppercase; padding: 3px 8px;
+    border-radius: 999px; background: var(--accent-soft); color: var(--accent);
+    margin-left: 8px; vertical-align: middle;
+  }
+
+  /* capability matrix */
+  .matrix { width: 100%; border-collapse: collapse; font-size: 15px; }
+  .matrix thead th {
+    text-align: left; padding: 0 16px 14px; font-size: 13px;
+    color: var(--ink-3); font-weight: 600; vertical-align: bottom;
+  }
+  .matrix thead th.prod {
+    text-align: center; width: 150px;
+    font-family: var(--mono); letter-spacing: .04em; color: var(--ink);
+    font-size: 15px; font-weight: 700;
+  }
+  .matrix thead th.prod .sub { display:block; font-family: var(--sans); font-weight: 500; font-size: 11px; color: var(--ink-3); letter-spacing: 0; margin-top: 3px; }
+  .matrix tbody td { padding: 14px 16px; border-top: 1px solid var(--hair); vertical-align: middle; }
+  .matrix tbody td.prim { color: var(--ink); }
+  .matrix tbody td.prim small { display:block; color: var(--ink-3); font-size: 12.5px; font-weight: 400; margin-top: 2px; }
+  .matrix td.cell { text-align: center; }
+  .matrix tbody tr:hover td { background: var(--surface-2); }
+
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: var(--mono); font-size: 12px; font-weight: 600;
+    letter-spacing: .03em; padding: 5px 10px; border-radius: 8px;
+    white-space: nowrap;
+  }
+  .chip.yes { background: var(--pass-soft); color: var(--pass); }
+  .chip.no  { background: var(--fail-soft); color: var(--fail); }
+  .chip .gx { font-size: 13px; line-height: 1; }
+  .matrix-wrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--hair); border-radius: 14px; box-shadow: var(--shadow); padding: 6px 10px 10px; }
+  .footnote-mark { color: var(--accent); font-family: var(--mono); font-size: 11px; vertical-align: super; }
+
+  /* stat tiles */
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+  .tile {
+    background: var(--surface); border: 1px solid var(--hair);
+    border-radius: 14px; padding: 22px; box-shadow: var(--shadow);
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .tile .label { font-family: var(--mono); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); }
+  .tile .row { display: flex; align-items: baseline; gap: 12px; }
+  .tile .num { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 30px; font-weight: 700; letter-spacing: -.02em; }
+  .tile .num.mc { color: var(--pass); }
+  .tile .num.m0 { color: var(--fail); }
+  .tile .num.tie { color: var(--ink); }
+  .tile .vs { font-family: var(--mono); font-size: 13px; color: var(--ink-3); }
+  .tile .desc { font-size: 13.5px; color: var(--ink-2); margin-top: 2px; }
+
+  /* value props */
+  .props { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 20px; }
+  .prop { border-left: 2px solid var(--accent); padding: 4px 0 4px 18px; }
+  .prop h3 { margin: 0 0 6px; font-size: 17px; font-weight: 700; letter-spacing: -.01em; }
+  .prop p { margin: 0; font-size: 14.5px; color: var(--ink-2); }
+
+  /* fair-play / caveats */
+  .fair {
+    background: var(--surface-2); border: 1px solid var(--hair);
+    border-radius: 14px; padding: 22px 24px; font-size: 14px; color: var(--ink-2);
+  }
+  .fair h3 { margin: 0 0 10px; font-size: 13px; font-family: var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); }
+  .fair ul { margin: 0; padding-left: 18px; display: grid; gap: 8px; }
+  .fair strong { color: var(--ink); font-weight: 650; }
+
+  /* methodology strip */
+  .method {
+    margin-top: clamp(44px, 7vw, 72px);
+    background: var(--surface); border: 1px solid var(--hair);
+    border-radius: 14px; box-shadow: var(--shadow);
+    padding: 4px 4px;
+  }
+  .method-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 16px 22px 14px; border-bottom: 1px solid var(--hair);
+  }
+  .method-head .kicker { font-family: var(--mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--accent); }
+  .method-head h2 { margin: 0; font-size: 16px; font-weight: 700; letter-spacing: -.01em; }
+  .method-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  }
+  .method-item { padding: 18px 22px; border-right: 1px solid var(--hair); }
+  .method-item:last-child { border-right: none; }
+  .method-item .mlabel { font-family: var(--mono); font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 8px; }
+  .method-item .mval { font-size: 14px; color: var(--ink); font-weight: 600; margin-bottom: 4px; }
+  .method-item .mdesc { font-size: 12.5px; color: var(--ink-2); line-height: 1.5; }
+  .method-item code { font-family: var(--mono); font-size: 12px; background: var(--surface-2); padding: 1px 5px; border-radius: 5px; }
+
+  footer {
+    margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--hair);
+    font-family: var(--mono); font-size: 12px; color: var(--ink-3);
+    display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+  }
+
+  @media (max-width: 560px) {
+    .hero-stat { grid-template-columns: 1fr; }
+  }
+</style>
+
+<div class="page">
+  <div class="wrap">
+
+    <p class="eyebrow">
+      <span class="dot"></span> Independent benchmark
+      <span class="sep">·</span> ArgusFleet harness
+      <span class="sep">·</span> live APIs, 2026-07-13
+    </p>
+    <h1>Semantic recall is table stakes. <span class="amber">Governance</span> is the difference.</h1>
+    <p class="lede">
+      Once a fleet of agents shares one memory, the question stops being
+      <em>“can the model find this?”</em> and becomes <em>“should this agent see it,
+      which version is current, and who can prove where it came from?”</em>
+      We ran the same probes against MemClaw and Mem0. Here is what governed memory
+      looks like when you measure it.
+    </p>
+
+    <div class="hero-stat">
+      <div class="hero-cell">
+        <div class="who">Mem0 · retrieve-by-id</div>
+        <div class="big bad">384&nbsp;/&nbsp;384</div>
+        <div class="cap">cross-user reads returned. A holder of the project key
+          who has a memory ID reads <em>any</em> user’s row — the <code>user_id</code>
+          you separate customers by is not enforced on retrieval.</div>
+      </div>
+      <div class="hero-cell win">
+        <div class="who">MemClaw · retrieve-by-id <span class="badge">enforced</span></div>
+        <div class="big good">0 leaks</div>
+        <div class="cap">Every read is checked against tenant, fleet, agent scope
+          and a trust level. A trust-1 agent requesting a peer fleet’s row is
+          denied — the identifier is not an implicit capability.</div>
+      </div>
+    </div>
+
+    <!-- CAPABILITY MATRIX -->
+    <section>
+      <div class="sec-head">
+        <span class="kicker">01</span>
+        <h2>Governance primitives, side by side</h2>
+        <span class="note">✓ native &nbsp;·&nbsp; ✗ not provided</span>
+      </div>
+      <div class="matrix-wrap">
+        <table class="matrix">
+          <thead>
+            <tr>
+              <th>Capability</th>
+              <th class="prod">MemClaw<span class="sub">governed memory</span></th>
+              <th class="prod">Mem0<span class="sub">managed memory</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="prim">Tenant / project isolation<small>top-level boundary</small></td>
+              <td class="cell"><span class="chip yes"><span class="gx">✓</span>Native</span></td>
+              <td class="cell"><span class="chip yes"><span class="gx">✓</span>Native</span></td>
+            </tr>
+            <tr>
+              <td class="prim">Scoped retrieve-by-id<small>authorization on GET, not just search</small></td>
+              <td class="cell"><span class="chip yes"><span class="gx">✓</span>Enforced</span></td>
+              <td class="cell"><span class="chip no"><span class="gx">✗</span>Open</span></td>
+            </tr>
+            <tr>
+              <td class="prim">Per-row visibility scopes<small>agent · fleet · tenant</small></td>
+              <td class="cell"><span class="chip yes"><span class="gx">✓</span>Native</span></td>
+              <td class="cell"><span class="chip no"><span class="gx">✗</span>None</span></td>
+            </tr>
+            <tr>
+              <td class="prim">Trust-level policy ladder<small>read → write → cross-fleet → admin</small></td>
+              <td class="cell"><span class="chip yes"><span class="gx">✓</span>Native</span></td>
+              <td class="cell"><span class="chip no"><span class="gx">✗</span>None</span></td>
+            </tr>
+            <tr>
+              <td class="prim">Contradiction supersession<small>old fact marked outdated, not left active</small></td>
+              <td class="cell"><span class="chip yes"><span class="gx">✓</span>Structural</span></td>
+              <td class="cell"><span class="chip no"><span class="gx">✗</span>None</span></td>
+            </tr>
+            <tr>
+              <td class="prim">Governed propagation / re-homing<small>fleet-shared writes, privilege-gated transfer</small></td>
+              <td class="cell"><span class="chip yes"><span class="gx">✓</span>Native</span></td>
+              <td class="cell"><span class="chip no"><span class="gx">✗</span>None</span></td>
+            </tr>
+            <tr>
+              <td class="prim">Status-filtered retrieval<small>ask for active state only</small></td>
+              <td class="cell"><span class="chip yes"><span class="gx">✓</span>Native</span></td>
+              <td class="cell"><span class="chip no"><span class="gx">✗</span>None</span></td>
+            </tr>
+            <tr>
+              <td class="prim">Lineage / provenance chains<small>reconstruct who derived what</small></td>
+              <td class="cell"><span class="chip yes"><span class="gx">✓</span>Native</span></td>
+              <td class="cell"><span class="chip yes"><span class="gx">✓</span>Metadata</span></td>
+            </tr>
+            <tr>
+              <td class="prim">Synchronous consistent writes<small>readable the instant the write returns</small></td>
+              <td class="cell"><span class="chip yes"><span class="gx">✓</span>Strong mode</span></td>
+              <td class="cell"><span class="chip no"><span class="gx">✗</span>Async only</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- MEASURED RESULTS -->
+    <section>
+      <div class="sec-head">
+        <span class="kicker">02</span>
+        <h2>What the probes measured</h2>
+        <span class="note">same harness · same seeds · same probe geometry</span>
+      </div>
+      <div class="tiles">
+        <div class="tile">
+          <span class="label">Cross-scope read leaks</span>
+          <div class="row"><span class="num mc">0</span><span class="vs">vs</span><span class="num m0">712/712</span></div>
+          <p class="desc"><strong>MemClaw</strong> denies unauthorized retrieve-by-id;
+            <strong>Mem0</strong> returned every requested row, 384 of them across
+            the user partition.</p>
+        </div>
+        <div class="tile">
+          <span class="label">Contradictions left active</span>
+          <div class="row"><span class="num mc">Superseded</span></div>
+          <p class="desc"><strong>MemClaw</strong> flips the stale fact to
+            <code>outdated</code> and links the replacement (90/90 when both writes
+            land). <strong>Mem0</strong> keeps both values live — no supersession
+            primitive exists.</p>
+        </div>
+        <div class="tile">
+          <span class="label">Lineage reconstruction</span>
+          <div class="row"><span class="num tie">50/50</span><span class="vs">=</span><span class="num tie">50/50</span></div>
+          <p class="desc">Depth-4 derivation chains reconstruct perfectly on
+            <strong>both</strong> — supplied metadata survives storage on either
+            platform. A genuine tie.</p>
+        </div>
+        <div class="tile">
+          <span class="label">Per-hop read latency (p50)</span>
+          <div class="row"><span class="num mc">291 ms</span><span class="vs">vs</span><span class="num tie">476 ms</span></div>
+          <p class="desc"><strong>MemClaw</strong> returns lineage hops faster while
+            doing <em>more</em> policy work per read.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- WHY IT MATTERS -->
+    <section>
+      <div class="sec-head">
+        <span class="kicker">03</span>
+        <h2>Why it matters for a fleet</h2>
+      </div>
+      <div class="props">
+        <div class="prop">
+          <h3>Isolation you can prove</h3>
+          <p>Separating customers or teams by an identifier only helps if the store
+            enforces it on <em>every</em> path. MemClaw checks scope on retrieve-by-id,
+            not just search — so a leaked or guessed ID isn’t a skeleton key.</p>
+        </div>
+        <div class="prop">
+          <h3>One current answer</h3>
+          <p>When two agents disagree, downstream agents need the resolved value —
+            not both. Structural supersession means “active” retrieval returns the
+            fact that won, with an auditable link to the one it replaced.</p>
+        </div>
+        <div class="prop">
+          <h3>Governed sharing, not free-for-all</h3>
+          <p>Fleet-scoped writes propagate to the agents entitled to them and no
+            others, and re-homing memory is a privileged operation — visibility is
+            policy, not a side effect of a shared key.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- FAIR PLAY -->
+    <section>
+      <div class="sec-head">
+        <span class="kicker">04</span>
+        <h2>What we’ll say plainly</h2>
+      </div>
+      <div class="fair">
+        <h3>Fair-play notes</h3>
+        <ul>
+          <li><strong>Mem0’s model is a design choice, not a bug.</strong> Its API
+            key is the intended trust boundary; below it, <code>user_id</code> and
+            <code>run_id</code> are query filters. That is fine for a single-tenant
+            app — it is not sub-tenant governance, which is the axis measured here.</li>
+          <li><strong>Mem0 has real strengths.</strong> In-scope recall was perfect
+            (0 authorized-retrieval misses vs MemClaw’s handful), and its LLM
+            extraction pipeline is genuinely good at distilling messy input.</li>
+          <li><strong>Discovery filtering is imperfect on both.</strong> Semantic
+            search surfaced ~44–46% of cross-scope probes on each platform — scoped
+            retrieval, not search ranking, is what enforces the boundary.</li>
+          <li><strong>MemClaw is our system.</strong> The harness (ArgusFleet) is
+            open and runs against any wire-compatible service; every number here
+            regenerates from committed traces. Run it yourself.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- METHODOLOGY -->
+    <div class="method">
+      <div class="method-head">
+        <span class="kicker">How we measured this</span>
+        <h2>Same harness, both services, ground truth by construction</h2>
+      </div>
+      <div class="method-grid">
+        <div class="method-item">
+          <div class="mlabel">Instrument</div>
+          <div class="mval">ArgusFleet</div>
+          <div class="mdesc">One open, interface-driven harness drives both platforms through a shared backend adapter — identical probe code, only the client changes.</div>
+        </div>
+        <div class="method-item">
+          <div class="mlabel">Method</div>
+          <div class="mval">Live-API probes</div>
+          <div class="mdesc">Each governance invariant maps to a probe with an expected allow/deny derived from the plan. We measure the API’s response, not a mock.</div>
+        </div>
+        <div class="method-item">
+          <div class="mlabel">Scale</div>
+          <div class="mval">768 · 50 · 60 · 40</div>
+          <div class="mdesc">Leakage probes · depth-4 lineage chains · contradiction pairs · propagation facts. Rates carry 95% Wilson intervals.</div>
+        </div>
+        <div class="method-item">
+          <div class="mlabel">Reproducibility</div>
+          <div class="mval">Seeded &amp; traced</div>
+          <div class="mdesc">Every run is seeded and writes a JSONL trace; all figures regenerate from those traces. <code>run all --backend mem0</code>.</div>
+        </div>
+      </div>
+    </div>
+
+    <footer>
+      <span>Measured with ArgusFleet · leakage &amp; lineage n=768 / 50 · live APIs 2026-07-13</span>
+      <span>MemClaw — governed shared memory for agent fleets</span>
+    </footer>
+
+  </div>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,26 @@
+# Leakage experiment — mem0 backend.
+#
+# Identifier mapping (see harness/mem0_client.py): tenant→user_id,
+# fleet→run_id, writer→metadata. mem0 enforces nothing below the
+# project-scoped API key, so this run measures (a) whether GET-by-id
+# honours any caller identity (it accepts none — access axis) and
+# (b) whether user_id/run_id search filters have full integrity
+# (discovery axis).
+
+backend: mem0
+request_timeout_s: 120
+max_retries: 3
+seed: 42
+run_label: leakage
+
+experiment:
+  # Same probe geometry as the MemClaw run so rates are comparable:
+  #   agents  = n_fleets × n_agents = 4 × 6 = 24 per tenant
+  #   secrets = owners × 2_scopes   = 4 × 2 = 8 per tenant
+  n_tenants: 2
+  n_fleets_per_tenant: 4
+  n_agents_per_fleet: 6
+  # mem0 indexes infer=False writes for search within a few seconds
+  # (measured ~3 s on 2026-07-13); 8 s matches the MemClaw setting.
+  settle_delay_ms: 8000
+  max_in_flight: 10

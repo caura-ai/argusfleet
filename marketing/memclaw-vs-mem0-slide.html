@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  :root {
+    --ground: #0b0f16;
+    --surface: #121822;
+    --surface-2: #171f2b;
+    --hair: #26303f;
+    --ink: #eef2f8;
+    --ink-2: #aab4c4;
+    --ink-3: #71809a;
+    --accent: #e8a94a;
+    --pass: #46c072;
+    --fail: #f0685c;
+    --mono: "Cascadia Mono", "SF Mono", ui-monospace, Consolas, Menlo, monospace;
+    --sans: "Segoe UI", system-ui, ui-sans-serif, Roboto, Helvetica, Arial, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: #05070b; }
+  .slide {
+    width: 1280px; height: 720px; overflow: hidden;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    padding: 44px 60px 34px;
+    display: flex; flex-direction: column;
+    position: relative;
+  }
+  .slide::before {
+    content: ""; position: absolute; inset: 0;
+    background: radial-gradient(90% 70% at 92% 8%, rgba(232,169,74,.10), transparent 55%);
+    pointer-events: none;
+  }
+  .eyebrow {
+    font-family: var(--mono); font-size: 14px; letter-spacing: .2em;
+    text-transform: uppercase; color: var(--accent);
+    display: flex; align-items: center; gap: 12px; margin-bottom: 20px;
+  }
+  .eyebrow .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+  .eyebrow .sep { color: var(--ink-3); }
+  h1 {
+    font-size: 54px; font-weight: 800; letter-spacing: -.025em; line-height: 1;
+    margin-bottom: 8px;
+  }
+  h1 .amber { color: var(--accent); }
+  .sub { font-size: 19px; color: var(--ink-2); max-width: 92ch; margin-bottom: 26px; }
+
+  .cols { display: grid; grid-template-columns: 1.15fr 1fr; gap: 24px; flex: 1; min-height: 0; }
+
+  /* hero contrast card */
+  .contrast { display: grid; grid-template-rows: 1fr 1fr; gap: 14px; }
+  .cbox {
+    background: var(--surface); border: 1px solid var(--hair); border-radius: 16px;
+    padding: 22px 26px; display: flex; flex-direction: column; justify-content: center;
+    position: relative;
+  }
+  .cbox .who {
+    font-family: var(--mono); font-size: 14px; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--ink-3); margin-bottom: 10px; display: flex; align-items: center; gap: 10px;
+  }
+  .cbox .big { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 58px; font-weight: 700; line-height: .95; letter-spacing: -.02em; }
+  .cbox .big.good { color: var(--pass); }
+  .cbox .big.bad { color: var(--fail); }
+  .cbox .cap { font-size: 15px; color: var(--ink-2); margin-top: 8px; line-height: 1.4; }
+  .tag {
+    position: absolute; top: 18px; right: 20px;
+    font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
+    padding: 4px 10px; border-radius: 999px;
+  }
+  .tag.good { background: rgba(70,192,114,.14); color: var(--pass); }
+  .tag.bad { background: rgba(240,104,92,.14); color: var(--fail); }
+
+  /* scoreboard */
+  .score { background: var(--surface); border: 1px solid var(--hair); border-radius: 16px; padding: 24px 26px; display: flex; flex-direction: column; }
+  .score .h { font-family: var(--mono); font-size: 13px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 18px; }
+  .score-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+  .score-row .name { font-size: 17px; font-weight: 700; }
+  .score-row .name span { display: block; font-size: 12px; font-weight: 500; color: var(--ink-3); font-family: var(--mono); letter-spacing: .04em; }
+  .dots { display: flex; gap: 6px; }
+  .dots i { width: 15px; height: 15px; border-radius: 4px; display: inline-block; }
+  .dots i.on-mc { background: var(--pass); }
+  .dots i.on-m0 { background: var(--fail); }
+  .dots i.off { background: var(--surface-2); border: 1px solid var(--hair); }
+  .tally { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 22px; font-weight: 700; margin-left: 14px; min-width: 62px; text-align: right; }
+  .tally.mc { color: var(--pass); }
+  .tally.m0 { color: var(--fail); }
+  .score .divider { height: 1px; background: var(--hair); margin: 4px 0 20px; }
+  .minis { display: grid; gap: 14px; margin-top: auto; }
+  .mini { display: flex; align-items: baseline; gap: 10px; font-size: 14px; color: var(--ink-2); }
+  .mini b { color: var(--ink); font-weight: 650; }
+  .mini .k { font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); min-width: 118px; }
+
+  footer {
+    margin-top: 26px; display: flex; justify-content: space-between; align-items: center;
+    font-family: var(--mono); font-size: 13px; color: var(--ink-3);
+    border-top: 1px solid var(--hair); padding-top: 16px;
+  }
+  footer .brand { color: var(--ink); }
+  footer .brand b { color: var(--accent); }
+</style>
+</head>
+<body>
+  <div class="slide">
+    <div class="eyebrow">
+      <span class="dot"></span> Governed memory benchmark
+      <span class="sep">·</span> ArgusFleet · live APIs · 2026-07-13
+    </div>
+    <h1>Semantic recall is table stakes.<br><span class="amber">Governance</span> is the difference.</h1>
+    <p class="sub">The same probes, run against MemClaw and Mem0. When a fleet of agents shares one memory, who can read it — and which version is current — is measurable.</p>
+
+    <div class="cols">
+      <div class="contrast">
+        <div class="cbox">
+          <span class="tag bad">Mem0</span>
+          <div class="who">Retrieve-by-id · cross-user</div>
+          <div class="big bad">384&nbsp;/&nbsp;384</div>
+          <div class="cap">reads returned another user’s row. The <code>user_id</code> you separate customers by is not enforced on retrieval.</div>
+        </div>
+        <div class="cbox">
+          <span class="tag good">MemClaw</span>
+          <div class="who">Retrieve-by-id · scoped</div>
+          <div class="big good">0 leaks</div>
+          <div class="cap">Every read is checked against tenant, fleet, agent scope and trust level. An ID is not a skeleton key.</div>
+        </div>
+      </div>
+
+      <div class="score">
+        <div class="h">Governance primitives exposed</div>
+        <div class="score-row">
+          <div class="name">MemClaw<span>governed memory</span></div>
+          <div style="display:flex;align-items:center">
+            <div class="dots">
+              <i class="on-mc"></i><i class="on-mc"></i><i class="on-mc"></i><i class="on-mc"></i><i class="on-mc"></i><i class="on-mc"></i><i class="on-mc"></i><i class="on-mc"></i><i class="on-mc"></i>
+            </div>
+            <span class="tally mc">9/9</span>
+          </div>
+        </div>
+        <div class="score-row">
+          <div class="name">Mem0<span>managed memory</span></div>
+          <div style="display:flex;align-items:center">
+            <div class="dots">
+              <i class="on-m0"></i><i class="on-m0"></i><i class="off"></i><i class="off"></i><i class="off"></i><i class="off"></i><i class="off"></i><i class="off"></i><i class="off"></i>
+            </div>
+            <span class="tally m0">2/9</span>
+          </div>
+        </div>
+        <div class="divider"></div>
+        <div class="minis">
+          <div class="mini"><span class="k">Contradiction</span><span><b>Resolved</b> vs. both values left live (26/60 pairs)</span></div>
+          <div class="mini"><span class="k">Lineage</span><span><b>50/50 = 50/50</b> — both reconstruct chains (tie)</span></div>
+          <div class="mini"><span class="k">Read latency p50</span><span><b>291 ms</b> vs. 476 ms — faster, doing more policy</span></div>
+        </div>
+      </div>
+    </div>
+
+    <footer>
+      <span>Open harness · seeded · every figure regenerates from committed traces</span>
+      <span class="brand"><b>MemClaw</b> — governed shared memory for agent fleets</span>
+    </footer>
+  </div>
+</body>
+</html>

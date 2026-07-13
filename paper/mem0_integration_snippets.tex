@@ -1,0 +1,78 @@
+% =====================================================================
+% Mem0 cross-platform addendum — ready-to-paste LaTeX for the AAAI paper.
+% Terminology matches the submitted version: Fleet-Memory (evaluated
+% service), ArgusFleet (harness), Inv-Scope/Time/Lineage/Prop.
+% Numbers marked <TODO> are filled once the live contradiction/propagation
+% re-run completes; see paper/mem0_integration.md for prose + context.
+% =====================================================================
+
+% ---------------------------------------------------------------------
+% TABLE A — Capability matrix (place in §6 Reference Implementation).
+% Uses booktabs, already loaded by the paper.
+% ---------------------------------------------------------------------
+\begin{table}[t]
+\centering
+\small
+\caption{Governance-primitive capability matrix. A check denotes a
+natively exposed primitive; a dash denotes one the platform does not
+provide, which \textsc{ArgusFleet} records as \emph{unsupported} on the
+corresponding axis rather than as a failure.}
+\label{tab:capabilities}
+\begin{tabular}{lcc}
+\toprule
+Governance primitive & Fleet-Memory & Mem0 \\
+\midrule
+Project/tenant-key isolation            & \checkmark & \checkmark \\
+Caller-chosen sub-key search filters    & \checkmark & \checkmark \\
+Scoped identifier retrieval (\texttt{GET}-by-id) & \checkmark\textsuperscript{$\dagger$} & --- \\
+Per-row visibility scopes               & \checkmark & --- \\
+First-class entities (RDF subject)      & \checkmark & --- \\
+Structural supersession edge            & \checkmark & --- \\
+Ownership transfer / redistribution     & \checkmark & --- \\
+Status-filtered (\texttt{active}) search & \checkmark & --- \\
+Synchronous enriched (``strong'') writes & \checkmark & --- \\
+\bottomrule
+\end{tabular}
+\\[2pt]
+{\footnotesize \textsuperscript{$\dagger$}Enforced after the remediation
+reported in \S9.}
+\end{table}
+
+% ---------------------------------------------------------------------
+% TABLE B — Mem0 headline results (place in §8 Results, after Table 4).
+% ---------------------------------------------------------------------
+\begin{table}[t]
+\centering
+\small
+\caption{Mem0 headline results, from the same ArgusFleet experiments and
+seeds as the Fleet-Memory runs (Table~\ref{tab:headline}).
+``n/a'' marks an axis whose primitive Mem0 does not expose
+(Table~\ref{tab:capabilities}). Bracketed values are descriptive
+probe-level Wilson 95\% intervals with the clustering caveat of \S9.}
+\label{tab:mem0}
+\begin{tabular}{llr}
+\toprule
+Experiment & Metric & Value \\
+\midrule
+\multirow{4}{*}{Scope}
+ & tenant-key cross-scope \texttt{GET}-by-id & $712/712 = 1.000$ \\
+ & \quad of which cross-\texttt{user\_id} & $384/384 = 1.000$ \\
+ & search scope-filter violations & $328/712 = 0.461$ \\
+ & authorized-retrieval misses & $0/56 = 0.000$ \\
+\midrule
+\multirow{2}{*}{Lineage}
+ & depth-4 completeness \& writer identity & $50/50 = 1.000$ \\
+ & per-hop fetch latency p50 / p95 & $476 / 563$ ms \\
+\midrule
+\multirow{3}{*}{Propagation}
+ & fleet-sibling visibility (run\_id filter) & $120/120 = 1.000$ \\
+ & foreign-fleet hits (cooperating readers) & $0/80 = 0.000$ \\
+ & ownership transfer & n/a (unsupported) \\
+\midrule
+\multirow{3}{*}{Contradiction}
+ & persistence (both values coexist) & $26/60 = 0.433$ \\
+ & resolution (single value survives) & $0/60 = 0.000$ \\
+ & structural supersession & n/a (unsupported) \\
+\bottomrule
+\end{tabular}
+\end{table}
