@@ -1,0 +1,43 @@
+# Cross-agent propagation experiment — mem0 backend.
+#
+# fleet→run_id: fleet siblings read with the same run_id filter, foreign
+# readers with a different one, so visibility/isolation measure run_id
+# filter integrity. Ownership transfer has no mem0 primitive
+# (capabilities.redistribute=False): the harness records every planned
+# redistribute as ownership_transfer_skipped.
+#
+# write_mode is FAST here (infer=False): strong would route each fact
+# through mem0's LLM extraction, which rewrites content and materialises
+# asynchronously — the window phase would then measure LLM queue time,
+# not indexing lag. Verbatim writes keep t_visible comparable to
+# MemClaw's enrichment-lag number.
+
+backend: mem0
+request_timeout_s: 120
+max_retries: 3
+seed: 42
+run_label: propagation
+
+experiment:
+  # 40 facts × (3 fleet + 2 foreign) = 200 probes — same as MemClaw.
+  n_facts: 40
+  n_fleet_readers: 3
+  n_foreign_readers: 2
+  write_mode: fast
+  # Every /search counts against mem0's monthly retrieval quota, so the
+  # polling is deliberately shallow: fast (infer=false) writes are
+  # searchable within a second or two, so a 6 s window at 2 s cadence
+  # resolves visibility in ~1–3 polls. Redistribute is unsupported on
+  # mem0 and skipped (no reads), so the whole run costs ~230 retrievals.
+  visibility_timeout_ms: 6000
+  poll_interval_ms: 2000
+  redistribute_fraction: 0.5
+  # Low concurrency + a read gap keeps the burst under mem0's rate limit.
+  max_in_flight: 4
+  mem0_min_read_interval_ms: 350
+  n_window_facts: 8
+  window_poll_interval_ms: 1500
+  window_timeout_ms: 20000
+  tenant_id: null
+  fleet_id: null
+  foreign_fleet_id: null

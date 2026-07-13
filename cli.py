@@ -48,13 +48,57 @@ def _configure_logging(verbose: bool) -> None:
     )
 
 
-def _resolve_config(config: Path | None, seed: int | None, label: str | None) -> HarnessConfig:
+def _resolve_config(
+    config: Path | None,
+    seed: int | None,
+    label: str | None,
+    backend: str | None = None,
+) -> HarnessConfig:
     overrides: dict[str, object] = {}
     if seed is not None:
         overrides["seed"] = seed
     if label is not None:
         overrides["run_label"] = label
+    if backend is not None:
+        overrides["backend"] = backend
     return load_config(config_path=config, overrides=overrides)
+
+
+def _default_config_path(config_name: str, backend: str | None) -> Path | None:
+    """Pick the default YAML for an experiment, preferring a backend-
+    specific variant (``configs/<backend>/<name>.yaml``) when it exists.
+
+    Backend-specific configs carry knobs that only make sense on that
+    platform (e.g. mem0's contradiction run needs ``write_mode: strong``
+    → LLM inference, while its propagation run needs ``write_mode: fast``
+    → verbatim storage)."""
+    import os
+
+    root = Path(__file__).resolve().parent / "configs"
+    effective = (backend or os.getenv("ARGUSFLEET_BACKEND") or "memclaw").lower()
+    if effective != "memclaw":
+        candidate = root / effective / config_name
+        if candidate.exists():
+            return candidate
+    default = root / config_name
+    return default if default.exists() else None
+
+
+def _warn_if_key_missing(cfg: HarnessConfig, context: str = "") -> None:
+    prefix = f"WARNING{f' ({context})' if context else ''}"
+    if cfg.backend == "mem0":
+        if not cfg.mem0_api_key:
+            typer.secho(
+                f"{prefix}: no MEM0_API_KEY set — calls to api.mem0.ai will fail with 401.",
+                fg=typer.colors.YELLOW,
+                err=True,
+            )
+    elif not cfg.api_key:
+        typer.secho(
+            f"{prefix}: no MEMCLAW_API_KEY set — calls to memclaw.net will fail with 401.",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
 
 
 async def _purge_tenants(cfg: HarnessConfig, tenant_ids: list[str]) -> dict[str, int]:
@@ -73,19 +117,14 @@ async def _purge_tenants(cfg: HarnessConfig, tenant_ids: list[str]) -> dict[str,
     """
     import asyncio as _asyncio
 
-    from argusfleet.harness.client import MemClawError, memclaw_client
+    from argusfleet.harness.backend import BackendError, open_backend
 
     cleared: dict[str, int] = {}
     targets = list(dict.fromkeys(t for t in tenant_ids if t))
     if not targets:
         logging.warning("cleanup: no tenants to purge")
         return cleared
-    async with memclaw_client(
-        cfg.base_url,
-        cfg.api_key,
-        timeout_s=cfg.request_timeout_s,
-        max_retries=cfg.max_retries,
-    ) as client:
+    async with open_backend(cfg) as client:
         for tenant in targets:
             try:
                 before = await client.count_memories(tenant_id=tenant, include_deleted=False)
@@ -93,7 +132,7 @@ async def _purge_tenants(cfg: HarnessConfig, tenant_ids: list[str]) -> dict[str,
                 await client.delete_all_memories(tenant_id=tenant)
                 cleared[tenant] = n
                 logging.info("cleanup: purged %d memories from tenant %s", n, tenant)
-            except MemClawError as e:
+            except BackendError as e:
                 # A tenant the key isn't authorised for (e.g. a leakage
                 # second-tenant synthesised from the seed) yields 403 —
                 # skip it rather than aborting the whole purge.
@@ -114,6 +153,9 @@ def run_leakage(
     ),
     seed: int | None = typer.Option(None, "--seed", help="Override seed"),
     label: str | None = typer.Option(None, "--label", help="Override run label"),
+    backend: str | None = typer.Option(
+        None, "--backend", help="Memory platform: memclaw (default) or mem0"
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Debug logging"),
 ) -> None:
     """Run the cross-scope leakage experiment."""
@@ -121,15 +163,9 @@ def run_leakage(
     from argusfleet.experiments import leakage
 
     if config is None:
-        default = Path(__file__).resolve().parent / "configs" / "leakage.yaml"
-        config = default if default.exists() else None
-    cfg = _resolve_config(config, seed, label)
-    if not cfg.api_key:
-        typer.secho(
-            "WARNING: no MEMCLAW_API_KEY set — calls to memclaw.net will fail with 401.",
-            fg=typer.colors.YELLOW,
-            err=True,
-        )
+        config = _default_config_path("leakage.yaml", backend)
+    cfg = _resolve_config(config, seed, label, backend)
+    _warn_if_key_missing(cfg)
     result = asyncio.run(leakage.run(cfg))
     typer.echo(json.dumps(result, indent=2, default=str))
 
@@ -141,6 +177,9 @@ def run_contradiction(
     ),
     seed: int | None = typer.Option(None, "--seed", help="Override seed"),
     label: str | None = typer.Option(None, "--label", help="Override run label"),
+    backend: str | None = typer.Option(
+        None, "--backend", help="Memory platform: memclaw (default) or mem0"
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Debug logging"),
 ) -> None:
     """Run the temporal contradiction experiment."""
@@ -148,15 +187,9 @@ def run_contradiction(
     from argusfleet.experiments import contradiction
 
     if config is None:
-        default = Path(__file__).resolve().parent / "configs" / "contradiction.yaml"
-        config = default if default.exists() else None
-    cfg = _resolve_config(config, seed, label)
-    if not cfg.api_key:
-        typer.secho(
-            "WARNING: no MEMCLAW_API_KEY set — calls to memclaw.net will fail with 401.",
-            fg=typer.colors.YELLOW,
-            err=True,
-        )
+        config = _default_config_path("contradiction.yaml", backend)
+    cfg = _resolve_config(config, seed, label, backend)
+    _warn_if_key_missing(cfg)
     result = asyncio.run(contradiction.run(cfg))
     typer.echo(json.dumps(result, indent=2, default=str))
 
@@ -168,6 +201,9 @@ def run_provenance(
     ),
     seed: int | None = typer.Option(None, "--seed", help="Override seed"),
     label: str | None = typer.Option(None, "--label", help="Override run label"),
+    backend: str | None = typer.Option(
+        None, "--backend", help="Memory platform: memclaw (default) or mem0"
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Debug logging"),
 ) -> None:
     """Run the provenance reconstruction experiment."""
@@ -175,15 +211,9 @@ def run_provenance(
     from argusfleet.experiments import provenance
 
     if config is None:
-        default = Path(__file__).resolve().parent / "configs" / "provenance.yaml"
-        config = default if default.exists() else None
-    cfg = _resolve_config(config, seed, label)
-    if not cfg.api_key:
-        typer.secho(
-            "WARNING: no MEMCLAW_API_KEY set — calls to memclaw.net will fail with 401.",
-            fg=typer.colors.YELLOW,
-            err=True,
-        )
+        config = _default_config_path("provenance.yaml", backend)
+    cfg = _resolve_config(config, seed, label, backend)
+    _warn_if_key_missing(cfg)
     result = asyncio.run(provenance.run(cfg))
     typer.echo(json.dumps(result, indent=2, default=str))
 
@@ -195,6 +225,9 @@ def run_propagation(
     ),
     seed: int | None = typer.Option(None, "--seed", help="Override seed"),
     label: str | None = typer.Option(None, "--label", help="Override run label"),
+    backend: str | None = typer.Option(
+        None, "--backend", help="Memory platform: memclaw (default) or mem0"
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Debug logging"),
 ) -> None:
     """Run the cross-agent propagation experiment."""
@@ -202,15 +235,9 @@ def run_propagation(
     from argusfleet.experiments import propagation
 
     if config is None:
-        default = Path(__file__).resolve().parent / "configs" / "propagation.yaml"
-        config = default if default.exists() else None
-    cfg = _resolve_config(config, seed, label)
-    if not cfg.api_key:
-        typer.secho(
-            "WARNING: no MEMCLAW_API_KEY set — calls to memclaw.net will fail with 401.",
-            fg=typer.colors.YELLOW,
-            err=True,
-        )
+        config = _default_config_path("propagation.yaml", backend)
+    cfg = _resolve_config(config, seed, label, backend)
+    _warn_if_key_missing(cfg)
     result = asyncio.run(propagation.run(cfg))
     typer.echo(json.dumps(result, indent=2, default=str))
 
@@ -233,6 +260,9 @@ def run_scale(
 def run_all(
     seed: int | None = typer.Option(None, "--seed", help="Override seed for every experiment"),
     label: str | None = typer.Option(None, "--label", help="Override run label prefix"),
+    backend: str | None = typer.Option(
+        None, "--backend", help="Memory platform: memclaw (default) or mem0"
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Debug logging"),
     skip: list[str] = typer.Option(
         [], "--skip", help="Experiments to skip (repeatable)"
@@ -279,15 +309,9 @@ def run_all(
             summary[name] = {"status": "skipped"}
             continue
         module, config_name = dispatch[name]
-        default_cfg = Path(__file__).resolve().parent / "configs" / config_name
-        config_path = default_cfg if default_cfg.exists() else None
-        cfg = _resolve_config(config_path, seed, label)
-        if not cfg.api_key:
-            typer.secho(
-                f"WARNING ({name}): no MEMCLAW_API_KEY — calls to memclaw.net will fail.",
-                fg=typer.colors.YELLOW,
-                err=True,
-            )
+        config_path = _default_config_path(config_name, backend)
+        cfg = _resolve_config(config_path, seed, label, backend)
+        _warn_if_key_missing(cfg, context=name)
         # The tenants this experiment will actually write to — including
         # the seed-synthesised IDs used in the default mode. Tracked here
         # so the post-run purge covers them (cfg.tenant_ids is empty in
@@ -318,7 +342,7 @@ def run_all(
     # Post-clean so the tenants are left empty for the next run / other
     # users. Purge every tenant the suite actually touched.
     if cleanup:
-        cfg_final = _resolve_config(None, seed, label)
+        cfg_final = _resolve_config(None, seed, label, backend)
         cleared = asyncio.run(_purge_tenants(cfg_final, all_tenants))
         if cleared:
             typer.secho(
@@ -352,30 +376,30 @@ def cleanup(
     yes: bool = typer.Option(
         False, "--yes", "-y", help="Skip the confirmation prompt"
     ),
+    backend: str | None = typer.Option(
+        None, "--backend", help="Memory platform: memclaw (default) or mem0"
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Debug logging"),
 ) -> None:
-    """Soft-delete every memory in the configured tenant(s).
+    """Delete every memory in the configured tenant(s).
 
-    Targets each tenant in ``MEMCLAW_TENANT_ID``. Soft-delete releases
-    MemClaw's near-duplicate gate (its dedup queries filter
+    Targets each tenant in ``MEMCLAW_TENANT_ID`` (or, with ``--backend
+    mem0``, each user in ``MEM0_USER_IDS``). On MemClaw the soft-delete
+    releases the near-duplicate gate (its dedup queries filter
     ``deleted_at IS NULL``), so this is the reset to run between
     experiment campaigns on a shared tenant.
     """
     _configure_logging(verbose)
-    cfg = _resolve_config(None, None, None)
+    cfg = _resolve_config(None, None, None, backend)
     if not cfg.tenant_ids:
+        env_hint = "MEM0_USER_IDS" if cfg.backend == "mem0" else "MEMCLAW_TENANT_ID"
         typer.secho(
-            "No MEMCLAW_TENANT_ID configured — nothing to purge.",
+            f"No {env_hint} configured — nothing to purge.",
             fg=typer.colors.RED,
             err=True,
         )
         raise typer.Exit(code=2)
-    if not cfg.api_key:
-        typer.secho(
-            "WARNING: no MEMCLAW_API_KEY set — the purge will fail with 401.",
-            fg=typer.colors.YELLOW,
-            err=True,
-        )
+    _warn_if_key_missing(cfg)
     if not yes:
         target = ", ".join(cfg.tenant_ids)
         typer.confirm(

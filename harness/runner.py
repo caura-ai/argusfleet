@@ -21,15 +21,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-from argusfleet.harness.client import MemClawClient, memclaw_client
+from argusfleet.harness.backend import MemoryBackend, open_backend
 from argusfleet.harness.config import HarnessConfig
 from argusfleet.harness.logging import JsonlSink
 
 
 def make_run_id(cfg: HarnessConfig, default_label: str) -> str:
-    """Generate ``<UTC-stamp>-<label>-seed<N>`` — unique per invocation."""
+    """Generate ``<UTC-stamp>-<label>[-<backend>]-seed<N>`` — unique per
+    invocation. The backend is embedded only when it isn't the default
+    ``memclaw`` so historical run-dir names stay stable."""
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     label = cfg.run_label or default_label
+    if cfg.backend and cfg.backend != "memclaw":
+        label = f"{label}-{cfg.backend}"
     return f"{stamp}-{label}-seed{cfg.seed}"
 
 
@@ -93,26 +97,20 @@ def latest_run_dir(runs_dir: Path) -> Path | None:
 async def run_with_client(
     cfg: HarnessConfig,
     *,
-    client: MemClawClient | None,
-    body: Callable[[MemClawClient], Awaitable[None]],
+    client: MemoryBackend | None,
+    body: Callable[[MemoryBackend], Awaitable[None]],
 ) -> None:
-    """Execute ``body(client)`` against either a provided or autocreated client.
+    """Execute ``body(client)`` against either a provided or autocreated backend.
 
     Tests pass an in-memory client (driven by respx); production code
-    omits it so the harness builds one from ``cfg`` and closes it on the
-    way out. Centralising the lifecycle keeps each experiment's ``run()``
-    focused on workload definition.
+    omits it so the harness builds the backend selected by ``cfg.backend``
+    and closes it on the way out. Centralising the lifecycle keeps each
+    experiment's ``run()`` focused on workload definition.
     """
     if client is not None:
         await body(client)
         return
-    async with memclaw_client(
-        cfg.base_url,
-        cfg.api_key,
-        timeout_s=cfg.request_timeout_s,
-        max_retries=cfg.max_retries,
-        min_write_interval_ms=cfg.min_request_interval_ms,
-    ) as c:
+    async with open_backend(cfg) as c:
         await body(c)
 
 
@@ -135,7 +133,8 @@ def open_sink_with_envelope(
         "run_id": run_id,
         "experiment": experiment,
         "seed": cfg.seed,
-        "base_url": cfg.base_url,
+        "backend": cfg.backend,
+        "base_url": cfg.mem0_base_url if cfg.backend == "mem0" else cfg.base_url,
     }
     if extra:
         payload.update(extra)

@@ -1,0 +1,21 @@
+# Provenance experiment — mem0 backend.
+#
+# Chains ride in metadata.derived_from exactly as on MemClaw; mem0
+# preserves metadata verbatim on infer=False writes and GET-by-id
+# returns it, so completeness/accuracy/depth-fidelity are measured
+# identically. Writer identity is normalised out of
+# metadata._writer_agent by the client (mem0 has no per-writer field).
+
+backend: mem0
+request_timeout_s: 120
+max_retries: 3
+seed: 42
+run_label: provenance
+
+experiment:
+  # 50 chains × 4 depth = 200 writes — same geometry as the MemClaw run.
+  n_chains: 50
+  chain_depth: 4
+  max_in_flight: 6
+  tenant_id: null
+  fleet_id: null

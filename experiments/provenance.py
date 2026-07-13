@@ -50,7 +50,7 @@ from typing import Any
 import pandas as pd
 
 from argusfleet.experiments._common import bar_chart_from_frame
-from argusfleet.harness.client import MemClawClient, MemClawError
+from argusfleet.harness.backend import BackendError, MemoryBackend
 from argusfleet.harness.config import HarnessConfig
 from argusfleet.harness.metrics import (
     events_to_frame,
@@ -207,7 +207,7 @@ def _build_chains(cfg: HarnessConfig, *, nonce: str) -> list[_Chain]:
 
 
 async def _write_chain(
-    client: MemClawClient, chain: _Chain, sink: JsonlSink
+    client: MemoryBackend, chain: _Chain, sink: JsonlSink
 ) -> dict[int, dict[str, Any]]:
     """Walk the chain root-to-leaf, recording each write's memory_id.
 
@@ -250,7 +250,7 @@ async def _write_chain(
             }
             sink.write("write", written[step.depth_index])
             prev_memory_id = memory_id
-        except MemClawError as e:
+        except BackendError as e:
             written[step.depth_index] = {
                 "chain_id": chain.chain_id,
                 "depth_index": step.depth_index,
@@ -272,7 +272,7 @@ async def _write_chain(
 
 
 async def _verify_chain(
-    client: MemClawClient,
+    client: MemoryBackend,
     chain: _Chain,
     written: dict[int, dict[str, Any]],
     sink: JsonlSink,
@@ -342,7 +342,7 @@ async def _verify_chain(
         visited.add(cursor_id)
         try:
             resp = await client.retrieve_memory(cursor_id, tenant_id=chain.tenant_id)
-        except MemClawError as e:
+        except BackendError as e:
             broken_at = f"fetch_{e.status_code}"
             sink.write(
                 "fetch",
@@ -432,7 +432,7 @@ async def _verify_chain(
 async def run(
     cfg: HarnessConfig,
     *,
-    client: MemClawClient | None = None,
+    client: MemoryBackend | None = None,
 ) -> dict[str, Any]:
     run_id, run_dir, events_path = make_run_dir(cfg, "provenance")
     chains = _build_chains(cfg, nonce=run_id)
@@ -447,7 +447,7 @@ async def run(
         chains[0].depth if chains else 0,
     )
 
-    async def _execute(c: MemClawClient) -> None:
+    async def _execute(c: MemoryBackend) -> None:
         with open_sink_with_envelope(
             events_path,
             run_id=run_id,

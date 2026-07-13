@@ -60,7 +60,7 @@ from typing import Any
 import pandas as pd
 
 from argusfleet.experiments._common import bar_chart_from_frame
-from argusfleet.harness.client import MemClawClient, MemClawError
+from argusfleet.harness.backend import BackendError, MemoryBackend
 from argusfleet.harness.config import HarnessConfig
 from argusfleet.harness.metrics import (
     events_to_frame,
@@ -232,7 +232,7 @@ def _build_plan(cfg: HarnessConfig, *, nonce: str) -> _PropagationPlan:
 
 
 async def _seed_facts(
-    client: MemClawClient,
+    client: MemoryBackend,
     plan: _PropagationPlan,
     sink: JsonlSink,
     *,
@@ -267,7 +267,7 @@ async def _seed_facts(
             }
             sink.write("write", {k: v for k, v in written[token].items()
                                   if k != "write_ts_perf"})
-        except MemClawError as e:
+        except BackendError as e:
             written[token] = {
                 "token": token,
                 "memory_id": None,
@@ -299,7 +299,7 @@ def _items_match_token(items: list[dict[str, Any]], token: str) -> bool:
 
 
 async def _measure_window(
-    client: MemClawClient,
+    client: MemoryBackend,
     plan: _PropagationPlan,
     sink: JsonlSink,
     *,
@@ -337,7 +337,7 @@ async def _measure_window(
                 metadata={"experiment": "propagation", "canary": token, "phase": "window"},
                 write_mode=write_mode,
             )
-        except MemClawError as e:
+        except BackendError as e:
             sink.write("window_probe", {
                 "token": token, "reader_agent": reader, "observed_visible": False,
                 "poll_count": 0, "t_visible_ms": None, "write_ok": False,
@@ -361,7 +361,7 @@ async def _measure_window(
                 if _items_match_token(items or [], token):
                     saw = True
                     break
-            except MemClawError as e:
+            except BackendError as e:
                 last_status = e.status_code
             if time.perf_counter() >= deadline:
                 break
@@ -381,7 +381,7 @@ async def _measure_window(
 
 
 async def _poll_visibility(
-    client: MemClawClient,
+    client: MemoryBackend,
     *,
     plan: _PropagationPlan,
     reader_agent: str,
@@ -443,7 +443,7 @@ async def _poll_visibility(
             if _items_match_token(items or [], token):
                 saw = True
                 break
-        except MemClawError as e:
+        except BackendError as e:
             last_status = e.status_code
             last_trace = e.trace_id
         if single_attempt or time.perf_counter() >= deadline:
@@ -475,7 +475,7 @@ async def _poll_visibility(
 
 
 async def _redistribute_and_verify(
-    client: MemClawClient,
+    client: MemoryBackend,
     *,
     plan: _PropagationPlan,
     write_record: dict[str, Any],
@@ -511,7 +511,7 @@ async def _redistribute_and_verify(
         redistribute_status = resp.status_code
         redistribute_trace = resp.trace_id
         redistribute_latency = resp.latency_ms
-    except MemClawError as e:
+    except BackendError as e:
         redistribute_ok = False
         redistribute_status = e.status_code
         redistribute_trace = e.trace_id
@@ -522,7 +522,7 @@ async def _redistribute_and_verify(
         get_resp = await client.retrieve_memory(memory_id, tenant_id=plan.tenant_id)
         body = get_resp.json or {}
         owner_after = body.get("agent_id") if isinstance(body, dict) else None
-    except MemClawError:
+    except BackendError:
         owner_after = None
 
     transferred = owner_after == plan.redistribute_target
@@ -550,7 +550,7 @@ async def _redistribute_and_verify(
 async def run(
     cfg: HarnessConfig,
     *,
-    client: MemClawClient | None = None,
+    client: MemoryBackend | None = None,
 ) -> dict[str, Any]:
     run_id, run_dir, events_path = make_run_dir(cfg, "propagation")
     plan = _build_plan(cfg, nonce=run_id)
@@ -579,7 +579,7 @@ async def run(
         visibility_timeout_ms,
     )
 
-    async def _execute(c: MemClawClient) -> None:
+    async def _execute(c: MemoryBackend) -> None:
         with open_sink_with_envelope(
             events_path,
             run_id=run_id,
@@ -660,7 +660,29 @@ async def run(
             succeeded_tokens = [t for t, rec in writes.items() if rec.get("succeeded")]
             n_redist = int(len(succeeded_tokens) * redistribute_fraction)
             chosen = set(rng.sample(succeeded_tokens, k=min(n_redist, len(succeeded_tokens))))
-            if chosen:
+            if chosen and not c.capabilities.redistribute:
+                # The platform has no ownership-transfer primitive (e.g.
+                # mem0): record each planned redistribute as an explicit
+                # 501 skip so the summary reports
+                # ``ownership_transfer_skipped`` instead of a false 0%
+                # transfer rate — mirroring how a MemClaw trust-gate 403
+                # is reported.
+                for t in chosen:
+                    sink.write(
+                        "redistribute",
+                        {
+                            "token": t,
+                            "memory_id": writes[t].get("memory_id"),
+                            "redistribute_ok": False,
+                            "redistribute_status": 501,
+                            "error": "unsupported_by_backend",
+                            "writer_agent": writes[t].get("writer_agent"),
+                            "target_agent": plan.redistribute_target,
+                            "owner_after": None,
+                            "ownership_transferred": False,
+                        },
+                    )
+            elif chosen:
                 await asyncio.gather(
                     *(
                         _redistribute_and_verify(

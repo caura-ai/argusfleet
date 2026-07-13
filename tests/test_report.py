@@ -19,23 +19,20 @@ def _seed_run(
     started_at: str,
     label: str = "test",
     plots: list[str] | None = None,
+    backend: str | None = None,
 ) -> Path:
     run_dir = outputs_dir / "runs" / f"{started_at}-{label}-seed7"
     run_dir.mkdir(parents=True, exist_ok=True)
     events = run_dir / "events.jsonl"
+    data: dict[str, object] = {
+        "experiment": experiment,
+        "seed": 7,
+        "run_id": run_dir.name,
+    }
+    if backend is not None:
+        data["backend"] = backend
     events.write_text(
-        json.dumps(
-            {
-                "ts": started_at,
-                "event": "run_start",
-                "data": {
-                    "experiment": experiment,
-                    "seed": 7,
-                    "run_id": run_dir.name,
-                },
-            }
-        )
-        + "\n",
+        json.dumps({"ts": started_at, "event": "run_start", "data": data}) + "\n",
         encoding="utf-8",
     )
     pd.DataFrame(
@@ -68,10 +65,38 @@ def test_discover_picks_latest_per_experiment(tmp_path: Path) -> None:
     )
 
     latest = _discover_runs(tmp_path)
-    assert set(latest.keys()) == {"leakage", "contradiction"}
-    assert "newer" in latest["leakage"].run_dir.name
-    assert latest["leakage"].summary["n_probes"] == 200
-    assert latest["contradiction"].summary["detection_rate"] == 1.0
+    # Keys are (backend, experiment); envelope-less legacy runs default
+    # to the memclaw backend.
+    assert set(latest.keys()) == {("memclaw", "leakage"), ("memclaw", "contradiction")}
+    assert "newer" in latest[("memclaw", "leakage")].run_dir.name
+    assert latest[("memclaw", "leakage")].summary["n_probes"] == 200
+    assert latest[("memclaw", "contradiction")].summary["detection_rate"] == 1.0
+
+
+def test_discover_keeps_backends_separate(tmp_path: Path) -> None:
+    """A newer mem0 run must NOT shadow the latest memclaw run of the
+    same experiment — the report keys on (backend, experiment)."""
+    _seed_run(
+        tmp_path,
+        "leakage",
+        summary={"leak_rate": 0.0, "n_probes": 100},
+        started_at="20260601T120000Z",
+        label="claw",
+    )
+    _seed_run(
+        tmp_path,
+        "leakage",
+        summary={"leak_rate": 1.0, "n_probes": 100},
+        started_at="20260602T120000Z",
+        label="m0",
+        backend="mem0",
+    )
+    latest = _discover_runs(tmp_path)
+    assert latest[("memclaw", "leakage")].summary["leak_rate"] == 0.0
+    assert latest[("mem0", "leakage")].summary["leak_rate"] == 1.0
+    md = render_markdown(latest)
+    assert "## leakage — memclaw" in md
+    assert "## leakage — mem0" in md
 
 
 def test_render_markdown_handles_partial_coverage(tmp_path: Path) -> None:
@@ -104,10 +129,11 @@ def test_write_report_copies_plots(tmp_path: Path) -> None:
     assert report_path.exists()
     md = report_path.read_text(encoding="utf-8")
     assert "## leakage" in md
-    # The copied plot should land next to the markdown with an
-    # experiment-prefixed filename so paths don't collide across runs.
+    # The copied plot should land next to the markdown with a
+    # backend+experiment-prefixed filename so paths don't collide
+    # across runs or platforms.
     copied_names = [Path(p).name for p in out["copied_plots"]]
-    assert "leakage-leakage_by_axis.png" in copied_names
+    assert "memclaw-leakage-leakage_by_axis.png" in copied_names
 
 
 def test_render_markdown_empty(tmp_path: Path) -> None:

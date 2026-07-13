@@ -40,7 +40,7 @@ from typing import Any
 
 import pandas as pd
 
-from argusfleet.harness.client import MemClawClient, MemClawError
+from argusfleet.harness.backend import BackendError, MemoryBackend
 from argusfleet.harness.config import HarnessConfig
 from argusfleet.harness.metrics import (
     events_to_frame,
@@ -250,7 +250,7 @@ def _scope_to_visibility(scope: MemoryScope) -> str:
 
 
 async def _seed_secrets(
-    client: MemClawClient, plan: _ScenarioPlan, sink: JsonlSink
+    client: MemoryBackend, plan: _ScenarioPlan, sink: JsonlSink
 ) -> dict[str, str]:
     """Write every secret. Returns {token -> memory_id} for verification."""
     written: dict[str, str] = {}
@@ -284,7 +284,7 @@ async def _seed_secrets(
                     "token": secret["token"],
                 },
             )
-        except MemClawError as e:
+        except BackendError as e:
             sink.write(
                 "write",
                 {
@@ -304,7 +304,7 @@ async def _seed_secrets(
 
 
 async def _probe_one(
-    client: MemClawClient,
+    client: MemoryBackend,
     probe: dict[str, Any],
     sink: JsonlSink,
     *,
@@ -346,7 +346,7 @@ async def _probe_one(
                 access_status = get_resp.status_code
                 access_trace = get_resp.trace_id
                 access_latency = get_resp.latency_ms
-            except MemClawError as e:
+            except BackendError as e:
                 # 403/404 are the correct deny outcomes; everything else
                 # (5xx, transport) is recorded as an error rather than a
                 # silent deny to keep the metric honest.
@@ -388,7 +388,7 @@ async def _probe_one(
             search_status = resp.status_code
             search_trace = resp.trace_id
             search_latency = resp.latency_ms
-        except MemClawError as e:
+        except BackendError as e:
             search_status = e.status_code
             search_trace = e.trace_id
 
@@ -449,7 +449,7 @@ async def _probe_one(
 async def run(
     cfg: HarnessConfig,
     *,
-    client: MemClawClient | None = None,
+    client: MemoryBackend | None = None,
 ) -> dict[str, Any]:
     """Execute the leakage experiment end-to-end.
 
@@ -470,7 +470,7 @@ async def run(
     rate_gate = asyncio.Semaphore(int(exp.get("max_in_flight", 8)))
     settle_delay_ms = float(exp.get("settle_delay_ms", 0.0))
 
-    async def _execute(c: MemClawClient) -> None:
+    async def _execute(c: MemoryBackend) -> None:
         with open_sink_with_envelope(
             events_path,
             run_id=run_id,
