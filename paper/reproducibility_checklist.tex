@@ -1,0 +1,222 @@
+\makeatletter
+\@ifundefined{isChecklistMainFile}{
+  % We are compiling a standalone document
+  \newif\ifreproStandalone
+  \reproStandalonetrue
+}{
+  % We are being \input into the main paper
+  \newif\ifreproStandalone
+  \reproStandalonefalse
+}
+\makeatother
+
+\ifreproStandalone
+\documentclass[letterpaper]{article}
+\usepackage[submission]{aaai2027}
+\setlength{\pdfpagewidth}{8.5in}
+\setlength{\pdfpageheight}{11in}
+\frenchspacing
+
+\begin{document}
+\fi
+\setlength{\leftmargini}{20pt}
+\makeatletter\def\@listi{\leftmargin\leftmargini \topsep .5em \parsep .5em \itemsep .5em}
+\def\@listii{\leftmargin\leftmarginii \labelwidth\leftmarginii \advance\labelwidth-\labelsep \topsep .4em \parsep .4em \itemsep .4em}
+\def\@listiii{\leftmargin\leftmarginiii \labelwidth\leftmarginiii \advance\labelwidth-\labelsep \topsep .4em \parsep .4em \itemsep .4em}\makeatother
+
+\setcounter{secnumdepth}{0}
+\renewcommand\thesubsection{\arabic{subsection}}
+\renewcommand\labelenumi{\thesubsection.\arabic{enumi}}
+
+\newcounter{checksubsection}
+\newcounter{checkitem}[checksubsection]
+
+\newcommand{\checksubsection}[1]{%
+  \refstepcounter{checksubsection}%
+  \paragraph{\arabic{checksubsection}. #1}%
+  \setcounter{checkitem}{0}%
+}
+
+\newcommand{\checkitem}{%
+  \refstepcounter{checkitem}%
+  \item[\arabic{checksubsection}.\arabic{checkitem}.]%
+}
+\newcommand{\question}[2]{\normalcolor\checkitem #1 #2 \color{blue}}
+\newcommand{\ifyespoints}[1]{\makebox[0pt][l]{\hspace{-15pt}\normalcolor #1}}
+
+\section*{Reproducibility Checklist}
+
+\vspace{1em}
+\hrule
+\vspace{1em}
+
+\textbf{Instructions for Authors:}
+
+This document outlines key aspects for assessing reproducibility. Please provide your input by editing this \texttt{.tex} file directly.
+
+For each question (that applies), replace the ``Type your response here'' text with your answer.
+
+\vspace{1em}
+\noindent
+\textbf{Example:} If a question appears as
+%
+\begin{center}
+\noindent
+\begin{minipage}{.9\linewidth}
+\ttfamily\raggedright
+\string\question \{Proofs of all novel claims are included\} \{(yes/partial/no)\} \\
+Type your response here
+\end{minipage}
+\end{center}
+you would change it to:
+\begin{center}
+\noindent
+\begin{minipage}{.9\linewidth}
+\ttfamily\raggedright
+\string\question \{Proofs of all novel claims are included\} \{(yes/partial/no)\} \\
+yes
+\end{minipage}
+\end{center}
+%
+Please make sure to:
+\begin{itemize}\setlength{\itemsep}{.1em}
+\item Replace ONLY the ``Type your response here'' text and nothing else.
+\item Use one of the options listed for that question (e.g., \textbf{yes}, \textbf{no}, \textbf{partial}, or \textbf{NA}).
+\item \textbf{Not} modify any other part of the \texttt{\string\question} command or any other lines in this document.\\
+\end{itemize}
+
+You can \texttt{\string\input} this .tex file right before \texttt{\string\end\{document\}} of your main file or compile it as a stand-alone document. Check the instructions on your conference's website to see if you will be asked to provide this checklist with your paper or separately.
+
+\vspace{1em}
+\hrule
+\vspace{1em}
+
+% The questions start here
+
+\checksubsection{General Paper Structure}
+\begin{itemize}
+
+\question{Includes a conceptual outline and/or pseudocode description of AI methods introduced}{(yes/partial/no/NA)}
+yes
+
+\question{Clearly delineates statements that are opinions, hypothesis, and speculation from objective facts and results}{(yes/no)}
+yes
+
+\question{Provides well-marked pedagogical references for less-familiar readers to gain background necessary to replicate the paper}{(yes/no)}
+yes
+
+\end{itemize}
+\checksubsection{Theoretical Contributions}
+\begin{itemize}
+
+\question{Does this paper make theoretical contributions?}{(yes/no)}
+no
+
+    \ifyespoints{\vspace{1.2em}If yes, please address the following points:}
+        \begin{itemize}
+
+    \question{All assumptions and restrictions are stated clearly and formally}{(yes/partial/no)}
+    NA
+
+    \question{All novel claims are stated formally (e.g., in theorem statements)}{(yes/partial/no)}
+    NA
+
+    \question{Proofs of all novel claims are included}{(yes/partial/no)}
+    NA
+
+    \question{Proof sketches or intuitions are given for complex and/or novel results}{(yes/partial/no)}
+    NA
+
+    \question{Appropriate citations to theoretical tools used are given}{(yes/partial/no)}
+    NA
+
+    \question{All theoretical claims are demonstrated empirically to hold}{(yes/partial/no/NA)}
+    NA
+
+    \question{All experimental code used to eliminate or disprove claims is included}{(yes/no/NA)}
+    NA
+
+    \end{itemize}
+\end{itemize}
+
+\checksubsection{Dataset Usage}
+\begin{itemize}
+
+\question{Does this paper rely on one or more datasets?}{(yes/no)}
+yes
+
+\ifyespoints{If yes, please address the following points:}
+\begin{itemize}
+
+    \question{A motivation is given for why the experiments are conducted on the selected datasets}{(yes/partial/no/NA)}
+    yes. The paper does not use an external corpus; each experiment's workload is procedurally generated from a seed, and the released JSONL event traces (committed under traces/) are the data artifact that backs every reported number. The workload design is motivated directly by the four fleet-memory failure modes, one experiment per mode.
+
+    \question{All novel datasets introduced in this paper are included in a data appendix}{(yes/partial/no/NA)}
+    yes. The per-write and per-probe JSONL event traces for every reported run (including all four N=200 contradiction runs and the N=100 run) are committed under traces/ in the open-source repository (commit 2c55bb5); all CSV summaries and figures regenerate deterministically from them.
+
+    \question{All novel datasets introduced in this paper will be made publicly available upon publication of the paper with a license that allows free usage for research purposes}{(yes/partial/no/NA)}
+    yes. The traces ship in the Apache-2.0-licensed argusfleet repository at https://github.com/caura-ai/argusfleet.
+
+    \question{All datasets drawn from the existing literature (potentially including authors' own previously published work) are accompanied by appropriate citations}{(yes/no/NA)}
+    NA. No dataset is drawn from prior literature; all inputs are procedurally generated by the harness.
+
+    \question{All datasets drawn from the existing literature (potentially including authors' own previously published work) are publicly available}{(yes/partial/no/NA)}
+    NA
+
+    \question{All datasets that are not publicly available are described in detail, with explanation why publicly available alternatives are not scientifically satisficing}{(yes/partial/no/NA)}
+    NA. All released data artifacts are publicly available.
+
+\end{itemize}
+\end{itemize}
+
+\checksubsection{Computational Experiments}
+\begin{itemize}
+
+\question{Does this paper include computational experiments?}{(yes/no)}
+yes
+
+\ifyespoints{If yes, please address the following points:}
+\begin{itemize}
+
+    \question{This paper states the number and range of values tried per (hyper-) parameter during development of the paper, along with the criterion used for selecting the final parameter setting}{(yes/partial/no/NA)}
+    partial. The harness has no learned models, so no hyperparameter search was conducted. Experiment configuration values (trial counts, per-experiment concurrency caps set below the 100 req/min search rate limit, an 8 writes/s throttle below the 10/s per-tenant write ceiling, settle windows, seed, and write mode) were fixed a priori with documented rationale in configs/*.yaml and the paper, not selected by a tuning criterion.
+
+    \question{Any code required for pre-processing data is included in the appendix}{(yes/partial/no)}
+    yes. Workloads are generated by the harness and all analysis derives from the committed JSONL event stream rather than in-memory state; both the generation and analysis code are in the open-source repository.
+
+    \question{All source code required for conducting and analyzing the experiments is included in a code appendix}{(yes/partial/no)}
+    yes
+
+    \question{All source code required for conducting and analyzing the experiments will be made publicly available upon publication of the paper with a license that allows free usage for research purposes}{(yes/partial/no)}
+    yes. Apache-2.0 at https://github.com/caura-ai/argusfleet.
+
+    \question{All source code implementing new methods have comments detailing the implementation, with references to the paper where each step comes from}{(yes/partial/no)}
+    partial. Code comments explain rationale and cross-reference the paper at the section and table level (for example, the agent-scope probe cites the bimodal-enforcement finding and its table, and the metrics module documents the Wilson-interval choice); per-line derivation references are sparser.
+
+    \question{If an algorithm depends on randomness, then the method used for setting seeds is described in a way sufficient to allow replication of results}{(yes/partial/no/NA)}
+    yes. Every experiment derives its plan from a single configurable seed (default 42, overridable via --seed) using random.Random(seed); per-run content is additionally salted with a run-unique nonce so re-runs against a stateful production service produce fresh writes rather than duplicate collisions. The seed, base URL, and tenant identifiers are recorded into each run's events.jsonl, and figures and summaries regenerate deterministically from that trace.
+
+    \question{This paper specifies the computing infrastructure used for running experiments (hardware and software), including GPU/CPU models; amount of memory; operating system; names and versions of relevant software libraries and frameworks}{(yes/partial/no)}
+    partial. The software stack is fully pinned and public (Python 3.12+; httpx 0.28.1, pydantic 2.13.4, numpy 2.4.6, pandas 3.0.3, scipy 1.17.1, matplotlib 3.10.9, tenacity 9.1.4). The harness is a CPU-only async network client with no GPU and no model training; every reported timing is a round-trip latency against the shared memclaw.net production service, so client CPU/RAM/OS are immaterial to the measurements and the server-side hardware is operator-managed and not disclosed.
+
+    \question{This paper formally describes evaluation metrics used and explains the motivation for choosing these metrics}{(yes/partial/no)}
+    yes. Each experiment defines its metrics and their motivation: leak\_rate and miss\_rate for leakage, detection\_rate and stale\_read\_rate for contradiction, completeness/accuracy/depth-fidelity for provenance, and visibility/time-to-visibility/is\_leak for propagation, each tied to the failure mode it measures.
+
+    \question{This paper states the number of algorithm runs used to compute each reported result}{(yes/no)}
+    yes. Deterministic experiments are reported from a single seeded run (which reproduces the reported outcomes); the load-bearing contradiction result is additionally reported across four independent N=200 runs plus an N=100 run, with the run-to-run range given (both-admitted 90-91, detection rate 0.48-0.50), and all five traces are committed.
+
+    \question{Analysis of experiments goes beyond single-dimensional summaries of performance (e.g., average; median) to include measures of variation, confidence, or other distributional information}{(yes/no)}
+    yes. Every headline rate carries a 95\% Wilson score interval; latencies are reported as p50/p95/p99 percentiles; and the contradiction result is reported as a run-to-run range across five independent runs.
+
+    \question{The significance of any improvement or decrease in performance is judged using appropriate statistical tests (e.g., Wilcoxon signed-rank)}{(yes/partial/no)}
+    partial. Rates carry 95\% Wilson score intervals and conclusions are drawn from boundary reasoning on those intervals (for example, 0/80 gives an upper bound of about 0.046). Classical significance tests such as Wilcoxon are not reported because the study measures a single production service with no baseline comparand (see Limitations), so there are no paired conditions to test.
+
+    \question{This paper lists all final (hyper-)parameters used for each model/algorithm in the paper’s experiments}{(yes/partial/no/NA)}
+    yes. All final experiment configuration values are shipped in configs/*.yaml and recorded into each run's events.jsonl; there are no learned-model hyperparameters.
+
+
+\end{itemize}
+\end{itemize}
+\ifreproStandalone
+\end{document}
+\fi

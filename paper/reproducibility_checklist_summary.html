@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ArgusFleet — Reproducibility Checklist</title>
+<style>
+  /* minimal reset */
+  *, *::before, *::after { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; }
+  img { max-width: 100%; }
+
+  :root {
+    /* Neutrals biased cool toward the teal accent, not pure grey */
+    --bg:        #f4f6f7;
+    --surface:   #ffffff;
+    --surface-2: #eef2f3;
+    --ink:       #12201f;
+    --ink-soft:  #47585a;
+    --ink-faint: #6f8082;
+    --line:      #d8e0e0;
+    --line-soft: #e7edec;
+    /* Accent: a considered deep teal — "governed / verified" */
+    --accent:    #0e7c78;
+    --accent-ink:#0a5c59;
+    --accent-wash:#dcefee;
+    /* Semantic status */
+    --ok:        #1f7a4d;
+    --ok-wash:   #dcefe3;
+    --warn:      #9a6a10;
+    --warn-wash: #f3e7cb;
+    --bad:       #a63232;
+    --bad-wash:  #f3dcdc;
+    --na:        #5b6b74;
+    --na-wash:   #e3e9ec;
+
+    --maxw: 74ch;
+    --mono: ui-monospace, "SF Mono", "SFMono-Regular", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:        #0c1413;
+      --surface:   #121d1c;
+      --surface-2: #16211f;
+      --ink:       #e6efed;
+      --ink-soft:  #a7bab8;
+      --ink-faint: #7c918f;
+      --line:      #24322f;
+      --line-soft: #1b2725;
+      --accent:    #35b7b0;
+      --accent-ink:#5fd0c9;
+      --accent-wash:#0f2b2a;
+      --ok:        #4fc17e;
+      --ok-wash:   #10281c;
+      --warn:      #d7a545;
+      --warn-wash: #2c2410;
+      --bad:       #e07171;
+      --bad-wash:  #2c1414;
+      --na:        #8b9ba1;
+      --na-wash:   #1c2427;
+    }
+  }
+  :root[data-theme="light"] {
+    --bg:#f4f6f7; --surface:#ffffff; --surface-2:#eef2f3; --ink:#12201f; --ink-soft:#47585a;
+    --ink-faint:#6f8082; --line:#d8e0e0; --line-soft:#e7edec; --accent:#0e7c78; --accent-ink:#0a5c59;
+    --accent-wash:#dcefee; --ok:#1f7a4d; --ok-wash:#dcefe3; --warn:#9a6a10; --warn-wash:#f3e7cb;
+    --bad:#a63232; --bad-wash:#f3dcdc; --na:#5b6b74; --na-wash:#e3e9ec;
+  }
+  :root[data-theme="dark"] {
+    --bg:#0c1413; --surface:#121d1c; --surface-2:#16211f; --ink:#e6efed; --ink-soft:#a7bab8;
+    --ink-faint:#7c918f; --line:#24322f; --line-soft:#1b2725; --accent:#35b7b0; --accent-ink:#5fd0c9;
+    --accent-wash:#0f2b2a; --ok:#4fc17e; --ok-wash:#10281c; --warn:#d7a545; --warn-wash:#2c2410;
+    --bad:#e07171; --bad-wash:#2c1414; --na:#8b9ba1; --na-wash:#1c2427;
+  }
+
+  body {
+    background: var(--bg); color: var(--ink);
+    font-family: var(--sans); line-height: 1.62;
+    -webkit-font-smoothing: antialiased; font-size: 16.5px;
+  }
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 22px 96px; }
+
+  /* ---- Header ---- */
+  header.masthead {
+    max-width: var(--maxw); margin: 0 auto; padding: 56px 22px 34px;
+    border-bottom: 1px solid var(--line);
+  }
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--accent-ink); margin: 0 0 14px;
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  }
+  .eyebrow .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); display: inline-block; }
+  h1 {
+    font-size: clamp(1.9rem, 5vw, 2.7rem); line-height: 1.08; margin: 0 0 14px;
+    letter-spacing: -.02em; text-wrap: balance; font-weight: 680;
+  }
+  .lede { font-size: 1.12rem; color: var(--ink-soft); margin: 0; max-width: 62ch; text-wrap: pretty; }
+  .meta-row {
+    display: flex; flex-wrap: wrap; gap: 8px 20px; margin-top: 24px;
+    font-family: var(--mono); font-size: 12.5px; color: var(--ink-faint);
+  }
+  .meta-row b { color: var(--ink-soft); font-weight: 600; }
+
+  /* ---- Section ---- */
+  section { margin-top: 46px; }
+  h2 {
+    font-size: 1.28rem; letter-spacing: -.01em; margin: 0 0 4px; font-weight: 660;
+    display: flex; align-items: baseline; gap: 12px;
+  }
+  h2 .num {
+    font-family: var(--mono); font-size: .78rem; color: var(--accent-ink);
+    background: var(--accent-wash); padding: 3px 8px; border-radius: 6px; letter-spacing: .04em;
+    position: relative; top: -2px;
+  }
+  .sub { color: var(--ink-faint); font-size: .95rem; margin: 0 0 20px; }
+  p { text-wrap: pretty; }
+
+  /* ---- Callout ---- */
+  .callout {
+    background: var(--surface); border: 1px solid var(--line);
+    border-left: 3px solid var(--bad); border-radius: 10px;
+    padding: 18px 20px; margin: 22px 0;
+  }
+  .callout.warn { border-left-color: var(--warn); }
+  .callout.accent { border-left-color: var(--accent); }
+  .callout h3 { margin: 0 0 8px; font-size: 1rem; letter-spacing: -.01em; }
+  .callout p { margin: 0; color: var(--ink-soft); font-size: .96rem; }
+  .callout p + p { margin-top: 10px; }
+
+  /* ---- Corrections table ---- */
+  .tablecard { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--surface); }
+  .scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: .93rem; min-width: 520px; }
+  thead th {
+    text-align: left; font-family: var(--mono); font-size: 11px; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--ink-faint); font-weight: 600;
+    padding: 13px 16px; background: var(--surface-2); border-bottom: 1px solid var(--line);
+  }
+  tbody td { padding: 13px 16px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: none; }
+  td.was { color: var(--bad); }
+  td.was s { color: var(--ink-faint); text-decoration-thickness: 1px; }
+  td.is { color: var(--ink); }
+  td.is code, td.was code { font-family: var(--mono); font-size: .86em; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
+  .arrow { color: var(--accent); font-weight: 700; }
+
+  /* ---- Answer list ---- */
+  .qgroup { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); overflow: hidden; }
+  .qgroup + .qgroup { margin-top: 16px; }
+  .qhead {
+    padding: 14px 18px; background: var(--surface-2); border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 10px; font-weight: 640; font-size: .98rem;
+  }
+  .qhead .gnum { font-family: var(--mono); color: var(--accent-ink); font-size: .82rem; }
+  .qitem { padding: 15px 18px; border-bottom: 1px solid var(--line-soft); }
+  .qitem:last-child { border-bottom: none; }
+  .qtop { display: flex; align-items: flex-start; gap: 12px; }
+  .code { font-family: var(--mono); font-size: .8rem; color: var(--ink-faint); flex: none; padding-top: 2px; min-width: 34px; }
+  .qtext { flex: 1; font-size: .95rem; }
+  .pill {
+    flex: none; font-family: var(--mono); font-size: 11px; font-weight: 700;
+    letter-spacing: .05em; text-transform: uppercase; padding: 3px 9px; border-radius: 999px;
+    border: 1px solid transparent; white-space: nowrap;
+  }
+  .pill.yes  { color: var(--ok);   background: var(--ok-wash);   border-color: color-mix(in srgb, var(--ok) 32%, transparent); }
+  .pill.part { color: var(--warn); background: var(--warn-wash); border-color: color-mix(in srgb, var(--warn) 32%, transparent); }
+  .pill.no   { color: var(--bad);  background: var(--bad-wash);  border-color: color-mix(in srgb, var(--bad) 32%, transparent); }
+  .pill.na   { color: var(--na);   background: var(--na-wash);   border-color: color-mix(in srgb, var(--na) 30%, transparent); }
+  .note { margin: 9px 0 0 46px; font-size: .88rem; color: var(--ink-soft); }
+  .note.collapsed { color: var(--ink-faint); font-style: italic; }
+
+  code { font-family: var(--mono); font-size: .88em; }
+  .inline-code { background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
+
+  /* ---- Legend ---- */
+  .legend { display: flex; flex-wrap: wrap; gap: 8px 14px; margin: 18px 0 6px; font-size: .82rem; color: var(--ink-faint); align-items: center; }
+  .legend .pill { cursor: default; }
+
+  /* ---- Footer ---- */
+  footer {
+    margin-top: 54px; padding-top: 22px; border-top: 1px solid var(--line);
+    font-size: .88rem; color: var(--ink-faint);
+  }
+  footer code { background: var(--surface-2); padding: 2px 6px; border-radius: 5px; color: var(--ink-soft); }
+  a { color: var(--accent-ink); text-decoration: underline; text-underline-offset: 2px; text-decoration-thickness: 1px; }
+  a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <p class="eyebrow"><span class="dot"></span> Reproducibility Checklist &nbsp;/&nbsp; AAAI&nbsp;2027</p>
+  <h1>Checklist answered for ArgusFleet — and the template it arrived in fixed first</h1>
+  <p class="lede">The submitted checklist came pre-filled with answers describing a machine-learning training paper. This one isn&rsquo;t. Every response was rewritten to match the paper actually in the repository and verified against the code.</p>
+  <div class="meta-row">
+    <span><b>Paper</b> &nbsp;Governed Shared Memory for Multi-Agent LLM Systems</span>
+    <span><b>System</b> &nbsp;ArgusFleet + MemClaw</span>
+    <span><b>Date</b> &nbsp;2026-07-22</span>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <section>
+    <div class="callout">
+      <h3>The pre-filled answers belonged to a different paper</h3>
+      <p>The template referenced a <b>GAT stability study</b>, <code>torch-geometric</code>, <code>xgboost</code>, GNN training, five training seeds, 400 attenuation simulations, bootstrap / cluster-bootstrap CIs, and Benjamini-Hochberg FDR control — on <b>Apple&nbsp;M3 / Python&nbsp;3.13 / PyTorch&nbsp;2.12</b>.</p>
+      <p>None of that exists in ArgusFleet. The paper is a <b>systems / measurement study</b> of a live REST service (<code>memclaw.net</code>): no models are trained, there is no GPU, and the statistics are Wilson score intervals with percentiles. Every answer below is grounded in <code>paper/paper.tex</code>, <code>requirements.txt</code>, and the experiment code.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">A</span> What changed, and why</h2>
+    <p class="sub">Template claim &rarr; verified reality in the repository.</p>
+    <div class="tablecard scroll">
+      <table>
+        <thead>
+          <tr><th>Dimension</th><th>Template said (wrong)</th><th>ArgusFleet reality</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Frameworks</td>
+            <td class="was"><s>PyTorch 2.12, torch-geometric, xgboost</s></td>
+            <td class="is">Async HTTP client only — <code>httpx</code>, <code>pydantic</code>, <code>pandas</code>, <code>numpy</code>, <code>scipy</code>, <code>matplotlib</code>. <b>No training, no GPU.</b></td>
+          </tr>
+          <tr>
+            <td>Language</td>
+            <td class="was"><s>Python 3.13</s></td>
+            <td class="is"><code>Python 3.12+</code> (<code>requires-python&nbsp;&gt;=3.12</code>)</td>
+          </tr>
+          <tr>
+            <td>Seeds</td>
+            <td class="was"><s>SEED=0; GAT seeds 1&ndash;4</s></td>
+            <td class="is">Default <code>seed = 42</code>, <code>random.Random(cfg.seed)</code>, <code>--seed</code> override, recorded into <code>events.jsonl</code></td>
+          </tr>
+          <tr>
+            <td>Statistics</td>
+            <td class="was"><s>bootstrap, cluster-bootstrap, permutation, MDE, Benjamini-Hochberg</s></td>
+            <td class="is"><b>Wilson score 95% CIs</b> + p50/p95/p99 percentiles + run-to-run range across repeated contradiction runs</td>
+          </tr>
+          <tr>
+            <td>Hardware</td>
+            <td class="was"><s>Apple M3, 16 GB, &ldquo;under two hours&rdquo;</s></td>
+            <td class="is">Not claimed — every timing is a server round-trip against a shared production service, so client hardware is immaterial</td>
+          </tr>
+          <tr>
+            <td>Repeated runs</td>
+            <td class="was"><s>five training seeds for a GNN</s></td>
+            <td class="is">Contradiction reported across <b>4&times;N=200 + 1&times;N=100</b> runs; others single seeded run (deterministic)</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">B</span> The answers</h2>
+    <p class="sub">As written into <code class="inline-code">paper/reproducibility_checklist.tex</code>.</p>
+
+    <div class="legend">
+      <span class="pill yes">yes</span>
+      <span class="pill part">partial</span>
+      <span class="pill no">no</span>
+      <span class="pill na">NA</span>
+      <span>&mdash; only answer lines were edited; no <code>\question</code> line was touched.</span>
+    </div>
+
+    <div class="qgroup">
+      <div class="qhead"><span class="gnum">1</span> General Paper Structure</div>
+      <div class="qitem"><div class="qtop"><span class="code">1.1</span><span class="qtext">Conceptual outline / pseudocode of AI methods introduced</span><span class="pill yes">yes</span></div></div>
+      <div class="qitem"><div class="qtop"><span class="code">1.2</span><span class="qtext">Opinions / hypotheses delineated from objective facts</span><span class="pill yes">yes</span></div></div>
+      <div class="qitem"><div class="qtop"><span class="code">1.3</span><span class="qtext">Pedagogical references for background</span><span class="pill yes">yes</span></div></div>
+    </div>
+
+    <div class="qgroup">
+      <div class="qhead"><span class="gnum">2</span> Theoretical Contributions</div>
+      <div class="qitem">
+        <div class="qtop"><span class="code">2.1</span><span class="qtext">Does this paper make theoretical contributions?</span><span class="pill no">no</span></div>
+        <p class="note">The <code>Inv-Scope</code> formalism is definitional, not a theorem-and-proof result &mdash; so 2.2&ndash;2.8 are all <b>NA</b>.</p>
+      </div>
+    </div>
+
+    <div class="qgroup">
+      <div class="qhead"><span class="gnum">3</span> Dataset Usage</div>
+      <div class="qitem">
+        <div class="qtop"><span class="code">3.1</span><span class="qtext">Does this paper rely on one or more datasets?</span><span class="pill yes">yes</span></div>
+        <p class="note">Judgment call &mdash; see section C. Treated the released JSONL traces as the data artifact.</p>
+      </div>
+      <div class="qitem"><div class="qtop"><span class="code">3.2</span><span class="qtext">Motivation for the selected datasets</span><span class="pill yes">yes</span></div><p class="note">Workloads generated per failure mode; motivation is the four-failure-mode taxonomy.</p></div>
+      <div class="qitem"><div class="qtop"><span class="code">3.3</span><span class="qtext">Novel datasets included in a data appendix</span><span class="pill yes">yes</span></div><p class="note">JSONL event traces committed under <code>traces/</code> (commit <code>2c55bb5</code>).</p></div>
+      <div class="qitem"><div class="qtop"><span class="code">3.4</span><span class="qtext">Novel datasets public with a research license</span><span class="pill yes">yes</span></div><p class="note">Apache-2.0 &mdash; <code>github.com/caura-ai/argusfleet</code>.</p></div>
+      <div class="qitem"><div class="qtop"><span class="code">3.5</span><span class="qtext">Literature datasets accompanied by citations</span><span class="pill na">NA</span></div><p class="note collapsed">No dataset drawn from prior literature; all inputs procedurally generated.</p></div>
+      <div class="qitem"><div class="qtop"><span class="code">3.6</span><span class="qtext">Literature datasets publicly available</span><span class="pill na">NA</span></div></div>
+      <div class="qitem"><div class="qtop"><span class="code">3.7</span><span class="qtext">Non-public datasets described with justification</span><span class="pill na">NA</span></div></div>
+    </div>
+
+    <div class="qgroup">
+      <div class="qhead"><span class="gnum">4</span> Computational Experiments</div>
+      <div class="qitem"><div class="qtop"><span class="code">4.1</span><span class="qtext">Does this paper include computational experiments?</span><span class="pill yes">yes</span></div></div>
+      <div class="qitem"><div class="qtop"><span class="code">4.2</span><span class="qtext">Range of values per (hyper-)parameter tried + selection criterion</span><span class="pill part">partial</span></div><p class="note">No tuning search &mdash; no learned models. Config values (N, concurrency &lt; 100 req/min, 8 writes/s throttle, settle windows, seed, write mode) fixed a priori with documented rationale in <code>configs/*.yaml</code>.</p></div>
+      <div class="qitem"><div class="qtop"><span class="code">4.3</span><span class="qtext">Pre-processing code included</span><span class="pill yes">yes</span></div></div>
+      <div class="qitem"><div class="qtop"><span class="code">4.4</span><span class="qtext">All source code for conducting + analyzing included</span><span class="pill yes">yes</span></div></div>
+      <div class="qitem"><div class="qtop"><span class="code">4.5</span><span class="qtext">Source code public with license</span><span class="pill yes">yes</span></div><p class="note collapsed">Apache-2.0, <code>github.com/caura-ai/argusfleet</code>.</p></div>
+      <div class="qitem"><div class="qtop"><span class="code">4.6</span><span class="qtext">New-method code commented with paper references</span><span class="pill part">partial</span></div><p class="note">Comments cross-reference the paper at section/table level; per-line derivation references are sparser.</p></div>
+      <div class="qitem"><div class="qtop"><span class="code">4.7</span><span class="qtext">Seed-setting method described</span><span class="pill yes">yes</span></div><p class="note">Default 42 via <code>random.Random(seed)</code>, <code>--seed</code> override, run-nonce salting, seed recorded in <code>events.jsonl</code>.</p></div>
+      <div class="qitem"><div class="qtop"><span class="code">4.8</span><span class="qtext">Computing infrastructure (hardware + software) specified</span><span class="pill part">partial</span></div><p class="note">Judgment call &mdash; see section C. Software fully pinned; client hardware not stated because timings are server round-trips.</p></div>
+      <div class="qitem"><div class="qtop"><span class="code">4.9</span><span class="qtext">Evaluation metrics formally described + motivated</span><span class="pill yes">yes</span></div></div>
+      <div class="qitem"><div class="qtop"><span class="code">4.10</span><span class="qtext">Number of algorithm runs stated per result</span><span class="pill yes">yes</span></div><p class="note">Deterministic experiments: one seeded run. Contradiction: 4&times;N=200 + N=100, with run-to-run range reported.</p></div>
+      <div class="qitem"><div class="qtop"><span class="code">4.11</span><span class="qtext">Analysis includes variation / confidence / distribution</span><span class="pill yes">yes</span></div><p class="note">95% Wilson CIs, p50/p95/p99 latencies, run-to-run range.</p></div>
+      <div class="qitem"><div class="qtop"><span class="code">4.12</span><span class="qtext">Significance judged with appropriate statistical tests</span><span class="pill part">partial</span></div><p class="note">Wilson CIs + boundary reasoning; classical tests (Wilcoxon) not applicable &mdash; single service, no baseline comparand.</p></div>
+      <div class="qitem"><div class="qtop"><span class="code">4.13</span><span class="qtext">All final (hyper-)parameters listed</span><span class="pill yes">yes</span></div><p class="note">All config values shipped in <code>configs/*.yaml</code> and recorded per-run; no learned-model hyperparameters.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">C</span> Two judgment calls worth your eye</h2>
+    <p class="sub">Both answers are defensible either way; here is the reasoning and how to flip them.</p>
+
+    <div class="callout accent">
+      <h3>3.1 &mdash; &ldquo;Relies on datasets?&rdquo; answered <b>yes</b></h3>
+      <p>There is no external corpus &mdash; workloads are generated deterministically from a seed. I answered <b>yes</b> because the released JSONL traces under <code>traces/</code> (Apache-2.0) are the artifact every reported number rests on, making it the fuller disclosure. To treat the traces purely as a reproducibility artifact instead, flip 3.1 to <b>no</b> and 3.2&ndash;3.7 all become <b>NA</b>.</p>
+    </div>
+
+    <div class="callout accent">
+      <h3>4.8 &mdash; Computing infrastructure answered <b>partial</b></h3>
+      <p>The software stack is fully pinned and public, but the paper does not state client CPU / RAM / OS because every reported figure is a round-trip latency against the shared <code>memclaw.net</code> service &mdash; client hardware does not affect it, and the server hardware is operator-managed. Add a client-hardware line to the paper to upgrade this to <b>yes</b>.</p>
+    </div>
+  </section>
+
+  <footer>
+    <p>Written to <code>paper/reproducibility_checklist.tex</code> &mdash; preamble preserved verbatim, only answer lines edited. Ready to <code>\input</code> before <code>\end{document}</code> in <code>paper.tex</code>, or compile standalone with the venue&rsquo;s <code>aaai2027.sty</code>.</p>
+  </footer>
+
+</div>
+</body>
+</html>
