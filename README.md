@@ -15,6 +15,7 @@ reconstruction, and cross-agent propagation.
 | `contradiction` | Detection of conflicting writes over the same RDF triple | implemented |
 | `provenance` | End-to-end reconstruction of derivation chains | implemented |
 | `propagation` | Fleet-sibling visibility + cross-fleet isolation + redistribute | implemented |
+| `derived-leakage` | Derivation-closed scope: can a peer read a team-scoped memory derived from an agent-scoped secret? (preregistered: **expected to FAIL** on the current server) | implemented |
 | `scale` | (not yet) | stubbed |
 
 ## Quick start
@@ -48,6 +49,7 @@ single markdown summary under `outputs/reports/<UTC-ts>/`.
 
 ```bash
 python -m argusfleet run <leakage|contradiction|provenance|propagation|all>
+python -m argusfleet run derived-leakage   # standalone only; not part of `run all`
 python -m argusfleet run all --seed 1337 --label baseline --skip propagation
 python -m argusfleet run all --no-cleanup    # leave written memories on the server
 python -m argusfleet report latest [--quiet] [--no-copy-plots]
@@ -75,6 +77,49 @@ Each leakage probe issues **both** an access check and a discovery check:
 Headline rates carry **95% Wilson confidence intervals** (`leak_rate_ci95_lo` /
 `leak_rate_ci95_hi`) in the summary CSV. `0/80` with a Wilson interval up to
 about 0.045 is honest; `0/80 → "zero leakage"` is overclaim.
+
+### Derived leakage (derivation-closed scope)
+
+`derived-leakage` tests the invariant that a memory `M`'s retrievability by
+reader `R` implies `R` is authorized for **every** source in `M`'s
+transitive derivation, not just `M`'s own scope. With the tenant key it
+provisions two trust-1 agent keys in one fleet (`A`, `C`); `A` writes an
+agent-scoped secret `S`, then a team-scoped summary `M` with
+`metadata.derived_from = [S]` (multi-hop with `chain_depth`, max 4), plus a
+clean team-scoped control `D`. `C` probes `M` with its own key using the same
+two signals as `leakage` (GET access = headline, search = secondary).
+Controls: `C` reads `D` and `A` reads `M` (expect allow); `C` reads `S`
+(expect deny — if it is allowed the run is marked `run_valid=false` and leaks
+are not graded). The `derived_from` walk is bounded (visited set + depth
+cap); chains that don't verify are reported as `chain_broken`, not leaks.
+
+**Preregistered outcome:** the probe is *expected to fail* on the current
+server — `M` is team-visible and nothing in the retrieval path consults
+`derived_from` — so a high `derived_leak_rate` is the predicted result, not a
+harness bug. If it passes, it is a regression guard. Requires a key that can
+provision agent keys (fails fast otherwise, no tenant-key fallback); agent
+keys persist server-side, so revoke them after the run. Run it standalone
+against a **test** tenant: `python -m argusfleet run derived-leakage`.
+
+Running it on your own test tenant (after the Quick start install):
+
+1. In `.env` set `MEMCLAW_API_KEY` (a tenant key that can call
+   `POST /api/v1/admin/agent-keys/provision`) and `MEMCLAW_TENANT_ID` (a
+   test tenant). `MEMCLAW_BASE_URL` is optional (default `https://memclaw.net`).
+2. Run `python -m argusfleet run derived-leakage`. Knobs (`n_chains`,
+   `chain_depth`, `home_fleet`, `settle_delay_ms`) live in
+   `configs/derived_leakage.yaml`.
+3. Results land in `outputs/runs/<UTC-ts>-derived-leakage-seed42/`:
+   `summary.csv` (headline `derived_leak_rate` with Wilson CI, `run_valid`,
+   `miss_rate`, `chain_broken_rate`), `derived_leakage.csv` (per probe),
+   `chains.csv` (per chain walk), `events.jsonl`, and two plots.
+4. Afterwards, revoke the two agent keys it prints (`af-dlk-a-*`,
+   `af-dlk-c-*`). Its memories stay in the tenant; `python -m argusfleet
+   cleanup` purges the whole tenant.
+
+At the defaults a run makes 262 requests (2 provisions, 60 writes, 40
+chain-walk GETs, 80 probe GETs, 80 searches) and takes about 5 minutes,
+dominated by the sequential writes.
 
 ### Clean-tenant runs
 
@@ -127,7 +172,7 @@ the leakage experiment only exercises within-tenant scope enforcement.
 pytest -q
 ```
 
-33 tests across client wire-format, runner scaffolding, the four
+69 tests across client wire-format, runner scaffolding, the five
 experiments (against `respx`-mocked servers), and the report aggregator.
 No tests hit the network.
 
@@ -137,7 +182,7 @@ No tests hit the network.
 argusfleet/
 ├── __init__.py / __main__.py / cli.py     package entry + Typer CLI
 ├── configs/                               experiment YAML configs
-├── experiments/                           leakage, contradiction, provenance, propagation
+├── experiments/                           leakage, contradiction, provenance, propagation, derived_leakage
 ├── harness/                               client, config, logging, metrics, plots, report, runner, models
 ├── outputs/runs/<ts>-<exp>-seed<N>/       per-run artifacts (events.jsonl, *.csv, *.png)
 ├── outputs/reports/<ts>/                  consolidated reports
