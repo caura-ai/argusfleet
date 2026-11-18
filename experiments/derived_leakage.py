@@ -1,5 +1,7 @@
 """Derived-leakage experiment.
 
+Implements the derivation-gating invariant from Sangaraju & Vissa, Lineage-Aware Memory Governance, IEEE Access, Vol. 14, pp. 139683-139693, 2026, DOI 10.1109/ACCESS.2026.3730363 (https://doi.org/10.1109/ACCESS.2026.3730363).
+
 What the experiment claims to measure
 -------------------------------------
 Invariant (*derivation-closed scope*): a memory ``M``'s retrievability by

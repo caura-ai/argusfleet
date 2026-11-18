@@ -92,6 +92,7 @@ Controls: `C` reads `D` and `A` reads `M` (expect allow); `C` reads `S`
 (expect deny — if it is allowed the run is marked `run_valid=false` and leaks
 are not graded). The `derived_from` walk is bounded (visited set + depth
 cap); chains that don't verify are reported as `chain_broken`, not leaks.
+This tests the derivation-gating invariant from Sangaraju & Vissa, Lineage-Aware Memory Governance, IEEE Access, Vol. 14, pp. 139683-139693, 2026, DOI 10.1109/ACCESS.2026.3730363.
 
 **Preregistered outcome:** the probe is *expected to fail* on the current
 server — `M` is team-visible and nothing in the retrieval path consults
