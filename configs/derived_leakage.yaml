@@ -1,0 +1,29 @@
+# Default derived-leakage experiment config. Override with `--config <path>`.
+# Env vars MEMCLAW_BASE_URL / MEMCLAW_API_KEY / MEMCLAW_TENANT_ID take
+# precedence. MEMCLAW_API_KEY must be able to provision agent keys
+# (POST /api/v1/admin/agent-keys/provision) — the run fails fast otherwise.
+# Use a TEST tenant: never run against a tenant holding real data.
+
+base_url: https://memclaw.net
+request_timeout_s: 120
+max_retries: 3
+seed: 42
+run_label: derived-leakage
+
+experiment:
+  # Chains per run. Each chain = S (agent-scoped) + chain_depth derived
+  # memories (team-scoped, derived_from the previous link) + one clean
+  # team-scoped control D, probed 4 ways (derived, clean, owner, source):
+  #   writes = n_chains × (chain_depth + 2)   = 60 at the defaults
+  #   probes = n_chains × 4                   = 80 (20 graded derived probes)
+  n_chains: 20
+  # Derivation hops from S to the probed leaf (1 = M derived from S;
+  # 2 = M2 <- M1 <- S). Capped at 4.
+  chain_depth: 1
+  # Fleet both agents (writer A, reader C) are homed in, at trust 1.
+  home_fleet: platform
+  # memclaw.net embeds asynchronously — probing before settle returns
+  # empty search results.
+  settle_delay_ms: 8000
+  # Probe concurrency cap (per-tenant /search limit is 100 req/min).
+  max_in_flight: 10

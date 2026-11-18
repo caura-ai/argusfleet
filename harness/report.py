@@ -19,7 +19,13 @@ from typing import Any
 import pandas as pd
 
 
-KNOWN_EXPERIMENTS = ("leakage", "contradiction", "provenance", "propagation")
+KNOWN_EXPERIMENTS = (
+    "leakage",
+    "contradiction",
+    "provenance",
+    "propagation",
+    "derived-leakage",
+)
 
 
 @dataclass(slots=True)
@@ -151,6 +157,17 @@ _HEADLINE_METRICS: dict[str, list[str]] = {
         "ownership_transfer_rate",
         "t_visible_p50",
         "t_visible_p95",
+    ],
+    "derived-leakage": [
+        "n_chains",
+        "derived_leak_rate",
+        "derived_leak_rate_ci95_lo",
+        "derived_leak_rate_ci95_hi",
+        "search_derived_leak_rate",
+        "miss_rate",
+        "chain_broken_rate",
+        "fetch_latency_p50",
+        "fetch_latency_p95",
     ],
 }
 

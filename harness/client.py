@@ -164,6 +164,69 @@ class MemClawClient:
         await self.aclose()
 
     # ------------------------------------------------------------------ #
+    # Agent-scoped credentials                                            #
+    # ------------------------------------------------------------------ #
+
+    def for_agent_key(self, api_key: str) -> MemClawClient:
+        """Return a sibling client that authenticates with ``api_key``.
+
+        The gateway resolves agent identity (agent_id, fleet, trust) from
+        the presented ``X-API-Key``, so an experiment that needs to act *as*
+        a specific agent builds one of these per provisioned agent key.
+
+        The sibling shares this client's HTTP connection pool and write
+        rate limiter (the 10 writes/s ceiling is per-tenant, so every
+        identity writing into the tenant must draw from one budget). It
+        does not own the pool: closing the sibling is a no-op and the pool
+        is released when the parent closes. No module-level state is
+        involved — the key lives only on the returned instance.
+        """
+        sibling = MemClawClient(
+            self._base_url.removesuffix("/api/v1"),
+            api_key=api_key,
+            max_retries=self._max_retries,
+            http_client=self._client,
+        )
+        sibling._write_limiter = self._write_limiter
+        return sibling
+
+    async def provision_agent_key(
+        self,
+        *,
+        agent_id: str,
+        fleet_id: str,
+        trust: int,
+        label: str | None = None,
+    ) -> MemClawResponse:
+        """Provision an agent-scoped key via ``POST /admin/agent-keys/provision``.
+
+        Mirrors ``scripts/agent_scope_leakage.py``: payload is
+        ``{agent_id, label, initial_fleet, initial_trust}`` and must be sent
+        with a key holding admin capability on the tenant. The raw key is
+        returned in the response JSON under ``raw_key`` (older deployments:
+        ``key`` / ``api_key``) — use :meth:`raw_agent_key` to extract it.
+
+        The response carries a live secret: callers must never log or
+        persist ``resp.json`` verbatim. Keys persist server-side until
+        revoked in the dashboard.
+        """
+        body = {
+            "agent_id": agent_id,
+            "label": label or f"argusfleet {agent_id}",
+            "initial_fleet": fleet_id,
+            "initial_trust": trust,
+        }
+        return await self._request("POST", "/admin/agent-keys/provision", json=body)
+
+    @staticmethod
+    def raw_agent_key(resp: MemClawResponse) -> str | None:
+        """Extract the raw key from a provision response (``raw_key`` |
+        ``key`` | ``api_key``), or ``None`` if absent."""
+        payload = resp.json if isinstance(resp.json, dict) else {}
+        key = payload.get("raw_key") or payload.get("key") or payload.get("api_key")
+        return str(key) if key else None
+
+    # ------------------------------------------------------------------ #
     # Domain operations                                                   #
     # ------------------------------------------------------------------ #
 

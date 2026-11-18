@@ -4,6 +4,7 @@ Layout intentionally matches the spec verbatim:
 
     python -m argusfleet run leakage
     python -m argusfleet run contradiction
+    python -m argusfleet run derived-leakage
     python -m argusfleet run scale
     python -m argusfleet plot latest
 
@@ -33,6 +34,8 @@ app.add_typer(report_app, name="report")
 
 # Experiments that ``run all`` will execute, in order. Stays in sync with
 # the dispatch table in ``plot latest``.
+# ``derived-leakage`` is deliberately excluded: it provisions agent keys that
+# persist server-side, so it runs only when invoked explicitly.
 _ALL_EXPERIMENTS = ("leakage", "contradiction", "provenance", "propagation")
 
 
@@ -240,6 +243,36 @@ def run_propagation(
     _warn_if_key_missing(cfg)
     result = asyncio.run(propagation.run(cfg))
     typer.echo(json.dumps(result, indent=2, default=str))
+
+
+@run_app.command("derived-leakage")
+def run_derived_leakage(
+    config: Path | None = typer.Option(
+        None, "--config", "-c", help="YAML config (default: configs/derived_leakage.yaml)"
+    ),
+    seed: int | None = typer.Option(None, "--seed", help="Override seed"),
+    label: str | None = typer.Option(None, "--label", help="Override run label"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Debug logging"),
+) -> None:
+    """Run the derived-leakage experiment (derivation-closed scope; MemClaw only).
+
+    Provisions two agent keys with the tenant key. Keys persist server-side;
+    revoke them in the dashboard after the run.
+    """
+    _configure_logging(verbose)
+    from argusfleet.experiments import derived_leakage
+
+    if config is None:
+        config = _default_config_path("derived_leakage.yaml", None)
+    cfg = _resolve_config(config, seed, label)
+    _warn_if_key_missing(cfg)
+    try:
+        result = asyncio.run(derived_leakage.run(cfg))
+    except derived_leakage.AgentKeyProvisioningError as e:
+        typer.secho(f"derived-leakage blocked: {e}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=2) from e
+    typer.echo(json.dumps(result, indent=2, default=str))
+    typer.secho(f"REVOKE REMINDER: {result['revoke_reminder']}", fg=typer.colors.YELLOW, err=True)
 
 
 @run_app.command("scale")
@@ -472,6 +505,8 @@ def plot_latest(
         from argusfleet.experiments.provenance import _materialize_outputs
     elif experiment_name == "propagation":
         from argusfleet.experiments.propagation import _materialize_outputs
+    elif experiment_name == "derived-leakage":
+        from argusfleet.experiments.derived_leakage import _materialize_outputs
     else:
         from argusfleet.experiments.leakage import _materialize_outputs
 
